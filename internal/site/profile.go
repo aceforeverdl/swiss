@@ -7,7 +7,9 @@ package site
 
 import (
 	"fmt"
+	"maps"
 	"os"
+	"slices"
 	"strings"
 
 	"github.com/modelsphere/swiss/internal/values"
@@ -238,6 +240,97 @@ type Nodes struct {
 	// GPUsPerNode is what a full GPU node has, used to derive
 	// cache.maxSlotsPerNode. 0 leaves that value to the chart's default.
 	GPUsPerNode int `yaml:"gpusPerNode,omitempty" json:"gpusPerNode,omitempty"`
+	// GPUProductAliases names GPU products by node labels, for a vendor install
+	// that does not label its nodes with the catalog's product name: product ->
+	// selectors, each "key=value[,key=value...]" with every pair required. A
+	// node matching aliases of two products takes the one with more pairs.
+	GPUProductAliases map[string][]string `yaml:"gpuProductAliases,omitempty" json:"gpuProductAliases,omitempty"`
+}
+
+// GPUProductAliasesMap is gpuProductAliases as label sets per product. Parse
+// has refused a malformed selector, so none is dropped here.
+func (n Nodes) GPUProductAliasesMap() map[string][]map[string]string {
+	if len(n.GPUProductAliases) == 0 {
+		return nil
+	}
+	out := make(map[string][]map[string]string, len(n.GPUProductAliases))
+	for product, sels := range n.GPUProductAliases {
+		for _, sel := range sels {
+			if labels, err := parseLabelSelector(sel); err == nil {
+				out[product] = append(out[product], labels)
+			}
+		}
+	}
+	return out
+}
+
+func parseLabelSelector(sel string) (map[string]string, error) {
+	labels := map[string]string{}
+	for _, pair := range strings.Split(sel, ",") {
+		k, v, ok := strings.Cut(pair, "=")
+		k, v = strings.TrimSpace(k), strings.TrimSpace(v)
+		if !ok || k == "" || v == "" {
+			return nil, fmt.Errorf("%q is not key=value", strings.TrimSpace(pair))
+		}
+		if prev, dup := labels[k]; dup && prev != v {
+			return nil, fmt.Errorf("%q sets %s twice", sel, k)
+		}
+		labels[k] = v
+	}
+	return labels, nil
+}
+
+// A node matching selectors of two products takes the one with more pairs, so
+// two of equal size that a single node could satisfy are refused. Product names
+// are trimmed like catalog and site names, since the site page writes this map.
+func (n *Nodes) checkGPUProductAliases() error {
+	if len(n.GPUProductAliases) == 0 {
+		return nil
+	}
+	type alias struct {
+		product, sel string
+		labels       map[string]string
+	}
+	var all []alias
+	trimmed := make(map[string][]string, len(n.GPUProductAliases))
+	for _, product := range slices.Sorted(maps.Keys(n.GPUProductAliases)) {
+		sels := n.GPUProductAliases[product]
+		name := strings.TrimSpace(product)
+		switch {
+		case name == "":
+			return fmt.Errorf("nodes.gpuProductAliases: empty product name")
+		case trimmed[name] != nil:
+			return fmt.Errorf("nodes.gpuProductAliases: %s is listed twice", name)
+		case len(sels) == 0:
+			return fmt.Errorf("nodes.gpuProductAliases.%s: needs at least one key=value selector", name)
+		}
+		trimmed[name] = sels
+		for _, sel := range sels {
+			labels, err := parseLabelSelector(sel)
+			if err != nil {
+				return fmt.Errorf("nodes.gpuProductAliases.%s: %w", name, err)
+			}
+			all = append(all, alias{name, sel, labels})
+		}
+	}
+	for i, a := range all {
+		for _, b := range all[i+1:] {
+			if a.product != b.product && len(a.labels) == len(b.labels) && compatible(a.labels, b.labels) {
+				return fmt.Errorf("nodes.gpuProductAliases: a node can match both %s (%q) and %s (%q) -- add a label to one", a.product, a.sel, b.product, b.sel)
+			}
+		}
+	}
+	n.GPUProductAliases = trimmed
+	return nil
+}
+
+func compatible(a, b map[string]string) bool {
+	for k, v := range a {
+		if w, ok := b[k]; ok && w != v {
+			return false
+		}
+	}
+	return true
 }
 
 // Load reads a profile file.
@@ -319,6 +412,9 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 		if !strings.HasPrefix(s.URL, "http://") && !strings.HasPrefix(s.URL, "https://") {
 			return nil, fmt.Errorf("%s: sites[%d] url %q must start with http:// or https://", origin, i, s.URL)
 		}
+	}
+	if err := p.Nodes.checkGPUProductAliases(); err != nil {
+		return nil, fmt.Errorf("%s: %w", origin, err)
 	}
 	return &p, nil
 }

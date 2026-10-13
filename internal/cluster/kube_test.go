@@ -290,3 +290,36 @@ func TestScopedProbeListsPerNamespace(t *testing.T) {
 		t.Fatalf("cluster-wide should see all three, got %d", len(got))
 	}
 }
+
+// An install that does not publish the catalog's product name still reports
+// it, so the node matches a variant listing that name.
+func TestAliasesRenameGPUNodes(t *testing.T) {
+	ascend := func(name string, labels map[string]string) *corev1.Node {
+		return &corev1.Node{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Labels: labels},
+			Status: corev1.NodeStatus{
+				Allocatable: corev1.ResourceList{"huawei.com/Ascend910": resource.MustParse("8")},
+			},
+		}
+	}
+	cs := fake.NewSimpleClientset(
+		ascend("broad", map[string]string{"accelerator": "huawei-Ascend910"}),
+		ascend("specific", map[string]string{"accelerator": "huawei-Ascend910", "accelerator-type": "module-910b4-8"}),
+		ascend("other-install", map[string]string{"accelerator/huawei-ascend910": "module-910b-8"}),
+	)
+	got, err := NewKubeWithClient(cs).Nodes(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	got = append(got, Node{Name: "cpu", Labels: map[string]string{"accelerator": "huawei-Ascend910"}})
+	ApplyGPUProductAliases(got, map[string][]map[string]string{
+		"Ascend-910B3": {{"accelerator": "huawei-Ascend910"}},
+		"Ascend-910B4": {{"accelerator": "huawei-Ascend910", "accelerator-type": "module-910b4-8"}},
+	})
+	want := map[string]string{"broad": "Ascend-910B3", "specific": "Ascend-910B4", "other-install": "module-910b-8", "cpu": ""}
+	for _, n := range got {
+		if n.GPUProduct != want[n.Name] {
+			t.Errorf("%s: product %q, want %q", n.Name, n.GPUProduct, want[n.Name])
+		}
+	}
+}

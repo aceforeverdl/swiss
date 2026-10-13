@@ -383,6 +383,20 @@ func (r saveProfileRequest) document() (string, error) {
 	return "", fmt.Errorf("the profile is empty")
 }
 
+// nodes is the inventory with the site profile's GPU product aliases applied.
+// Without a readable profile the labels' names stand: the node view works
+// before setup.
+func (s *Server) nodes(ctx context.Context) ([]cluster.Node, error) {
+	nodes, err := s.probe.Nodes(ctx)
+	if err != nil {
+		return nil, err
+	}
+	if p, err := s.Profile(ctx); err == nil {
+		cluster.ApplyGPUProductAliases(nodes, p.Nodes.GPUProductAliasesMap())
+	}
+	return nodes, nil
+}
+
 type nodeView struct {
 	cluster.Node
 	// Used is GPUs held by pods on this node, and Free what is left. Both are
@@ -403,7 +417,7 @@ type nodeView struct {
 func (s *Server) handleNodes(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 30*time.Second)
 	defer cancel()
-	nodes, err := s.probe.Nodes(ctx)
+	nodes, err := s.nodes(ctx)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return

@@ -89,17 +89,17 @@ type Requires struct {
 
 const VendorNvidia = "nvidia"
 
-// accelerators maps a vendor to the extended resource a pod requests and the
-// node label its product is published under. A table here rather than in the
-// catalog keeps Kubernetes resource strings out of a public repo, and out of
-// every site profile that would otherwise have to repeat the same well-known
-// values.
-var accelerators = map[string]struct{ Resource, ProductLabel string }{
-	VendorNvidia: {"nvidia.com/gpu", "nvidia.com/gpu.product"},
-	"ascend":     {"huawei.com/Ascend910", "accelerator/huawei-ascend910"},
-	"cambricon":  {"cambricon.com/mlu", "cambricon.com/mlu.product"},
-	"hygon":      {"hygon.com/dcu", "hygon.com/dcu.product"},
-	"amd":        {"amd.com/gpu", "amd.com/gpu.device-id"},
+// accelerators maps a vendor to the extended resource a pod requests. A table
+// here rather than in the catalog keeps Kubernetes resource strings out of a
+// public repo, and out of every site profile that would otherwise have to
+// repeat the same well-known values. The node labels naming a product live
+// with inventory, keyed by this resource.
+var accelerators = map[string]string{
+	VendorNvidia: "nvidia.com/gpu",
+	"ascend":     "huawei.com/Ascend910",
+	"cambricon":  "cambricon.com/mlu",
+	"hygon":      "hygon.com/dcu",
+	"amd":        "amd.com/gpu",
 }
 
 func (r Requires) VendorOrDefault() string {
@@ -110,10 +110,7 @@ func (r Requires) VendorOrDefault() string {
 }
 
 // ResourceName is the extended resource this variant's pods request.
-func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()].Resource }
-
-// ProductLabel is the node label GPUProduct values are matched against.
-func (r Requires) ProductLabel() string { return accelerators[r.VendorOrDefault()].ProductLabel }
+func (r Requires) ResourceName() string { return accelerators[r.VendorOrDefault()] }
 
 const (
 	TopologySingleNode = "single-node"

@@ -1,7 +1,10 @@
 package server
 
 import (
+	"encoding/json"
 	"testing"
+
+	"github.com/modelsphere/swiss/internal/cluster"
 )
 
 // nodeSelector ANDs its labels, so it cannot express "any of these products".
@@ -141,5 +144,70 @@ func TestTolerationsFromTheFormLandInThePlan(t *testing.T) {
 	}
 	if got := layerOf(p, "tolerations"); got != "form" {
 		t.Errorf("tolerations are the form's: %v", got)
+	}
+}
+
+// A deploy lands wherever inventory reports the product: one term per label
+// key inventory reads, one per alias. Terms are ORed, an alias's labels ANDed.
+func TestGPUProductTermsCoverInventoryKeysAndAliases(t *testing.T) {
+	keys := cluster.ProductLabels(nil)["huawei.com/Ascend910"]
+	aliases := map[string][]map[string]string{
+		"Ascend-910B3": {{"accelerator": "huawei-Ascend910"}},
+		"Ascend-910B4": {{"accelerator-type": "module-910b4-8", "accelerator": "huawei-Ascend910"}},
+		"unrequested":  {{"x": "y"}},
+	}
+	got, _ := json.Marshal(gpuProductTerms(keys, aliases, []string{"Ascend-910B3", "Ascend-910B4"}))
+	want := `[` +
+		`{"matchExpressions":[{"key":"accelerator/huawei-ascend910","operator":"In","values":["Ascend-910B3","Ascend-910B4"]}]},` +
+		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["Ascend-910B3","Ascend-910B4"]}]},` +
+		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["huawei-Ascend910"]}]},` +
+		`{"matchExpressions":[{"key":"accelerator","operator":"In","values":["huawei-Ascend910"]},{"key":"accelerator-type","operator":"In","values":["module-910b4-8"]}]}` +
+		`]`
+	if string(got) != want {
+		t.Fatalf("terms:\n got %s\nwant %s", got, want)
+	}
+}
+
+const aliasProfile = profileYAML + `nodes:
+  gpuProductAliases:
+    NVIDIA-H800:
+      - gpu.example.com/model=h800
+`
+
+func TestProfileGPUProductAliasesReachThePlan(t *testing.T) {
+	probe := liveProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": aliasProfile}
+	srv, _ := deployServerWith(t, probe, true)
+	code, p := post(t, srv, "/api/plans", map[string]any{
+		"model": "qwen3.6-35b-a3b", "serviceId": "r",
+		"gpuProducts": []string{"NVIDIA-H800"},
+	})
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, p)
+	}
+	na := planValues(p)["affinity"].(map[string]any)["nodeAffinity"].(map[string]any)
+	terms := na["requiredDuringSchedulingIgnoredDuringExecution"].(map[string]any)["nodeSelectorTerms"].([]any)
+	if len(terms) != 2 {
+		t.Fatalf("want the product label term and the alias term, got %v", terms)
+	}
+	alias := terms[1].(map[string]any)["matchExpressions"].([]any)[0].(map[string]any)
+	if alias["key"] != "gpu.example.com/model" || alias["values"].([]any)[0] != "h800" {
+		t.Fatalf("unexpected alias term: %v", alias)
+	}
+}
+
+func TestNodeViewReportsProfileAliases(t *testing.T) {
+	probe := gpuProbe()
+	probe.Maps["swiss/site-profile"] = map[string]string{"profile.yaml": aliasProfile}
+	probe.Nod = []cluster.Node{{
+		Name: "gpu-1", GPUResource: "nvidia.com/gpu", GPUProduct: "NVIDIA-Graphics-Device", GPUs: 8,
+		Labels: map[string]string{"gpu.example.com/model": "h800"}, Schedulable: true, Ready: true,
+	}}
+	code, body := get(t, testServer(t, probe), "/api/nodes")
+	if code != 200 {
+		t.Fatalf("status %d: %v", code, body)
+	}
+	if got := body["nodes"].([]any)[0].(map[string]any)["GPUProduct"]; got != "NVIDIA-H800" {
+		t.Fatalf("product %v, want the profile's alias", got)
 	}
 }

@@ -199,19 +199,15 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		}
 	}
 	// Affinity rather than nodeSelector: nodeSelector ANDs its labels, so it
-	// cannot say "any of these products". A single term with one In expression
-	// is the OR. Set at the nodeSelectorTerms path so a preferred rule sitting
-	// beside it survives.
+	// cannot say "any of these products". Set at the nodeSelectorTerms path so a
+	// preferred rule sitting beside it survives.
 	if len(req.GPUProducts) > 0 {
-		vals := make([]any, 0, len(req.GPUProducts))
-		for _, p := range req.GPUProducts {
-			vals = append(vals, p)
+		res := v.Requires.ResourceName()
+		keys := cluster.ProductLabels(s.cfg.Server.GPUProductLabelsMap())[res]
+		terms := gpuProductTerms(keys, prof.Nodes.GPUProductAliasesMap(), req.GPUProducts)
+		if len(terms) == 0 {
+			return nil, fmt.Errorf("no node label to match GPU products on for %s -- set server.gpuProductLabels, or nodes.gpuProductAliases in the site profile", res)
 		}
-		terms := []any{values.Tree{"matchExpressions": []any{values.Tree{
-			"key":      v.Requires.ProductLabel(),
-			"operator": "In",
-			"values":   vals,
-		}}}}
 		const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
 		if err := values.Set(overrides, path, terms); err != nil {
 			return nil, err
@@ -379,6 +375,36 @@ func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
 	return out
 }
 
+// gpuProductTerms is one term per label key inventory reads a product from, and
+// one per alias of a requested product, so a deploy can land wherever inventory
+// reports the product. Terms are ORed; an alias's labels are ANDed.
+func gpuProductTerms(keys []string, aliases map[string][]map[string]string, products []string) []any {
+	var terms []any
+	for _, key := range keys {
+		if key = strings.TrimSpace(key); key != "" {
+			vals := make([]any, 0, len(products))
+			for _, p := range products {
+				vals = append(vals, p)
+			}
+			terms = append(terms, values.Tree{"matchExpressions": []any{inExpr(key, vals)}})
+		}
+	}
+	for _, p := range products {
+		for _, sel := range aliases[p] {
+			exprs := make([]any, 0, len(sel))
+			for _, k := range slices.Sorted(maps.Keys(sel)) {
+				exprs = append(exprs, inExpr(k, []any{sel[k]}))
+			}
+			terms = append(terms, values.Tree{"matchExpressions": exprs})
+		}
+	}
+	return terms
+}
+
+func inExpr(key string, vals []any) values.Tree {
+	return values.Tree{"key": key, "operator": "In", "values": vals}
+}
+
 // checkGPUProducts refuses requested products the variant does not list, unless
 // forced; a forced product must be on the cluster. Listed products are never
 // checked against the cluster, forced or not, so forcing only ever widens what
@@ -401,7 +427,7 @@ func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, produc
 		return nil, fmt.Errorf("variant %s supports GPU products %s, not %s -- set forceGpuProducts to deploy on a product on this cluster that the catalog does not list",
 			v.ID, strings.Join(listed, ", "), strings.Join(off, ", "))
 	}
-	nodes, err := s.probe.Nodes(ctx)
+	nodes, err := s.nodes(ctx)
 	if err != nil {
 		return nil, &gpuInventoryError{err}
 	}
