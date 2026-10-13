@@ -18,8 +18,8 @@ func v1PlanFields(release string) map[string]any {
 	}
 }
 
-func schemaV1Message(repo string) string {
-	return "LLMService backend requires catalog schema v2; catalog repo " + repo + " uses v1; use the helm backend or migrate the catalog to v2"
+func schemaV1Message() string {
+	return "LLMService backend requires catalog schema v2; this plan records schema v1; use the helm backend or migrate the catalog to v2"
 }
 
 func explicitV1Probe(t *testing.T) cluster.Fake {
@@ -41,17 +41,16 @@ func TestLLMRejectsCatalogSchemaV1(t *testing.T) {
 	cases := []struct {
 		name  string
 		probe cluster.Fake
-		repo  string
 	}{
-		{"unset", v1ChartProbe(), "default"},
-		{"explicit v1", explicitV1Probe(t), "public"},
+		{"unset", v1ChartProbe()},
+		{"explicit v1", explicitV1Probe(t)},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			rig := startRig(t, tc.probe, true, false, backendLLMSVC)
 			hash := rig.storePlan(t, v1PlanFields(llmRelease))
 			code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
-			if code != http.StatusBadRequest || errText(out) != schemaV1Message(tc.repo) {
+			if code != http.StatusBadRequest || errText(out) != schemaV1Message() {
 				t.Fatalf("install %d %v", code, out)
 			}
 			if rig.count(t) != 0 || len(rig.w.written) != 0 {
@@ -73,7 +72,7 @@ func TestLLMRejectsCatalogSchemaV1(t *testing.T) {
 	}
 	hash := rig.storePlan(t, v1PlanFields(llmRelease))
 	code, out := post(t, rig.srv, "/api/apply", map[string]any{"planHash": hash})
-	if code != http.StatusBadRequest || errText(out) != schemaV1Message("default") {
+	if code != http.StatusBadRequest || errText(out) != schemaV1Message() {
 		t.Fatalf("upgrade %d %v", code, out)
 	}
 	got, err := rig.c.Get(t.Context(), "models", llmRelease)
@@ -117,6 +116,80 @@ func TestHelmAcceptsCatalogSchemaV1AndV2(t *testing.T) {
 			}
 			if rig.count(t) != 0 {
 				t.Fatal("helm install created an LLMService")
+			}
+		})
+	}
+}
+
+// A rollback writes the archived plan. Its schema is the plan's, so renaming
+// the catalog, or pointing the profile at a different repo, does not turn a
+// stored v2 release into a v1 one.
+func TestLLMRollbackKeepsV2AfterCatalogSwitch(t *testing.T) {
+	rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
+	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+	if code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash}); code != 200 {
+		t.Fatalf("install %d %v", code, out)
+	}
+	next := rig.storePlan(t, map[string]any{
+		"release": llmRelease, "overrides": map[string]any{"replicaCount": 4},
+	})
+	if code, out := post(t, rig.srv, "/api/apply", map[string]any{"planHash": next, "expectRevision": 1}); code != 200 {
+		t.Fatalf("apply %d %v", code, out)
+	}
+
+	// The name the plan recorded is gone. The profile's only catalog is a
+	// different repo, and it is v1.
+	rig.s.cfg.Server.CacheTTL = 0
+	rig.probe.Maps["swiss/site-profile"]["profile.yaml"] = profileYAML +
+		"applyWith: llmsvc\nchartRepo: oci://ghcr.io/modelsphere/charts\ncatalogs:\n  - name: other\n    url: /var/empty/not-next\n    schemaVersion: v1\n"
+
+	code, out := post(t, rig.srv, "/api/releases/models/"+llmRelease+"/rollback", map[string]any{
+		"toRevision": 1, "expectRevision": 2, "note": "catalog moved",
+	})
+	if code != 200 {
+		t.Fatalf("rollback of a stored v2 plan after the catalog was switched: %d %v", code, out)
+	}
+	if asNum(out["revision"]) != 3 || out["status"] != "applied" {
+		t.Fatalf("response %v", out)
+	}
+}
+
+// A stored v1 plan stays v1 even when the catalog name it records now points
+// at a v2 repo. An absent schema annotation is v1, the same as an explicit one.
+func TestLLMRollbackRefusesStoredV1Plan(t *testing.T) {
+	for _, schema := range []string{"v1", ""} {
+		name := schema
+		if name == "" {
+			name = "absent"
+		}
+		t.Run(name, func(t *testing.T) {
+			rig := startRig(t, llmProbe(), true, true, backendLLMSVC)
+			hash := rig.storePlan(t, map[string]any{"release": llmRelease})
+			if code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash}); code != 200 {
+				t.Fatalf("install %d %v", code, out)
+			}
+			before, err := rig.c.Get(t.Context(), "models", llmRelease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			rewriteRevisionSchema(t, rig, "models", llmRelease, 1, schema)
+
+			code, out := post(t, rig.srv, "/api/releases/models/"+llmRelease+"/rollback", map[string]any{
+				"toRevision": 1, "expectRevision": 1,
+			})
+			if code != http.StatusBadRequest || errText(out) != schemaV1Message() {
+				t.Fatalf("rollback %d %v", code, out)
+			}
+			got, err := rig.c.Get(t.Context(), "models", llmRelease)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if specCanon(before) != specCanon(got) || got.GetGeneration() != before.GetGeneration() {
+				t.Fatal("refused rollback mutated the object")
+			}
+			runs := rig.runs(t)
+			if len(runs) != 1 || runs[0].Action != "install" {
+				t.Fatalf("a refused rollback is not an audit row: %+v", runs)
 			}
 		})
 	}

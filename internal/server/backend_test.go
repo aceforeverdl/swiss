@@ -191,10 +191,11 @@ func newGateServer(t *testing.T, kind, applyWith, helmBin, helmfileBin string) *
 	}
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
-	cfg.Server.ApplyWith = applyWith
 	cfg.Server.HelmBin = helmBin
 	cfg.Server.HelmfileBin = helmfileBin
-	s := New(cfg, liveProbe(), log, "test")
+	probe := liveProbe()
+	profileApplyWith(probe, applyWith)
+	s := New(cfg, probe, log, "test")
 	db, err := store.Open(filepath.Join(t.TempDir(), "swiss.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -343,7 +344,7 @@ func TestLLMApplyWithHiddenFallsBackToHelm(t *testing.T) {
 				if info["served"] != true || !containsString(warns, "LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith") {
 					t.Fatalf("served %v warnings %v", info["served"], warns)
 				}
-			} else if !containsString(warns, "server.applyWith is llmsvc but the LLMService CRD is not served; new installs use helm: discovery down") {
+			} else if !containsString(warns, "site profile applyWith is llmsvc but the LLMService CRD is not served; new installs use helm: discovery down") {
 				t.Fatalf("warnings %v", warns)
 			}
 		})

@@ -20,7 +20,8 @@ under it.
   product.
 
 ### Changed
-- The LLMService backend requires catalog schema v2. A v1 catalog, including one whose `schemaVersion` is unset, is rejected with 400 before any cluster write. `swiss.modelsphere.dev/catalog-schema` records `v1` or `v2` on the LLMService. Helm still installs both.
+- The LLMService backend requires the plan's `source.schema` to be v2. Empty means v1 (a v1 catalog, including one whose `schemaVersion` is unset, and every plan stored before v2) and is rejected with 400 before any cluster write. Rollback uses that stored schema, so a v2 plan still rolls back after its catalog is renamed, and a stored v1 plan stays refused when that name now points at a v2 repo. `swiss.modelsphere.dev/catalog-schema` records `v1` or `v2` on the LLMService. Helm still installs both.
+- The backend for a new install is `applyWith` on the site profile (`helm` when omitted, or `llmsvc`), edited without a helm upgrade. `server.applyWith` and the chart's `config.applyWith` are removed. `rbac.applyWith` stays on the chart: the grant is install-time.
 - GitHub Actions pinned to commit SHAs.
 - `gpuProducts` is checked against the variant's `requires.gpuProduct`;
   an unlisted product is refused unless `forceGpuProducts` is set. Before, only

@@ -23,6 +23,17 @@ type Profile struct {
 	// Namespace a release lands in unless the deploy overrides it.
 	Namespace string `yaml:"namespace,omitempty" json:"namespace,omitempty"`
 
+	// ApplyWith is the backend a new install uses: "helm" or "llmsvc". Empty
+	// means helm. A release already in the cluster stays on the backend that
+	// owns it. llmsvc needs the LLMService CRD; when that CRD is not served,
+	// discovery fails, or swissd has no llmservices grant, new installs stay
+	// on helm and /api/cluster says so.
+	//
+	// It is a property of the cluster, like the catalogs below, so it lives in
+	// the document an operator edits from the web. The chart's rbac.applyWith
+	// stays install-time: that is the grant, which a running swissd cannot widen.
+	ApplyWith string `yaml:"applyWith,omitempty" json:"applyWith,omitempty"`
+
 	// Catalogs are the catalog repos this site deploys from, each under a name
 	// the pages and plan requests use. Viewing the catalog or deploying picks
 	// one; with a single repo there is nothing to pick, and with several the one
@@ -362,6 +373,12 @@ func Parse(raw []byte, origin string) (*Profile, error) {
 	}
 	if p.Model.PathTemplate == "" {
 		return nil, fmt.Errorf("%s: model.pathTemplate is required -- the catalog gives an identity, not a path", origin)
+	}
+	p.ApplyWith = strings.TrimSpace(p.ApplyWith)
+	switch p.ApplyWith {
+	case "", "helm", "llmsvc":
+	default:
+		return nil, fmt.Errorf("%s: applyWith %q is not helm or llmsvc", origin, p.ApplyWith)
 	}
 	p.Catalog = strings.TrimSpace(p.Catalog)
 	if p.Catalog != "" && len(p.Catalogs) > 0 {

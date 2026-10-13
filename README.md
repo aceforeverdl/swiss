@@ -68,7 +68,7 @@ PUT  /api/profile
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 ```
 
-`server.applyWith` chooses the backend for a new install: `helm` (the default) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires catalog schema v2; a v1 repo (`schemaVersion` unset counts as v1) is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/swiss-design.md](docs/swiss-design.md).
+`applyWith` on the site profile chooses the backend for a new install: `helm` (the default when the field is omitted) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires the plan's `source.schema` to be v2; empty means v1 and is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/swiss-design.md](docs/swiss-design.md).
 
 ## Deploy
 
@@ -94,12 +94,10 @@ helm install swiss ./helm/swiss -n swiss --create-namespace \
 `rbac.namespaces` is rendered into both the Roles and `cluster.namespaces`, so
 swissd lists only namespaces it was granted — a Role cannot authorise a
 cluster-wide list. `rbac.scope: cluster` drops the list and reads everything.
-`config.applyWith` (`helm` or `llmsvc`) is the new-install backend, rendered as
-`server.applyWith`; `helm` is left out of that file because it is the server
-default. `rbac.applyWith` is `helm` (today's grant), `both` (that grant plus
+`rbac.applyWith` is `helm` (today's grant), `both` (that grant plus
 LLMService), or `llmsvc` (LLMService writes and the read grants, without Secret,
-Role or workload writes). `llmsvc` on one side and `helm` on the other is
-refused.
+Role or workload writes). Anything else is refused. The new-install backend is
+`applyWith` on the site profile, which an operator edits without a helm upgrade.
 
 Deploy mode needs a volume and one replica: the database holds the audit log and
 the rollback history, neither of which is cluster state. Upgrades do not depend

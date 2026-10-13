@@ -172,38 +172,13 @@ func TestAuthDirResolvesAgainstTheConfigFile(t *testing.T) {
 	}
 }
 
-func TestApplyWith(t *testing.T) {
+// The backend a new install uses is the site profile's applyWith. A key left
+// in swissd's config is a typo, not a setting that does nothing.
+func TestServerApplyWithIsNotConfig(t *testing.T) {
 	dir := t.TempDir()
 	base := "catalog: ./c\ncluster:\n  profile: {configMap: swiss/p}\nserver:\n  auth: {disabled: true}\n"
-
-	c, err := Load(write(t, dir, "default.yaml", base))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Server.ApplyWith != "helm" {
-		t.Fatalf("applyWith = %q, want helm", c.Server.ApplyWith)
-	}
-	if err := c.ValidateServer(); err != nil {
-		t.Fatal(err)
-	}
-
-	c, err = Load(write(t, dir, "llm.yaml", base+"  applyWith: llmsvc\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Server.ApplyWith != "llmsvc" {
-		t.Fatalf("applyWith = %q", c.Server.ApplyWith)
-	}
-	if err := c.ValidateServer(); err != nil {
-		t.Fatal(err)
-	}
-
-	c, err = Load(write(t, dir, "bad.yaml", base+"  applyWith: operator\n"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := c.ValidateServer(); err == nil {
-		t.Fatal("applyWith operator should be rejected")
+	if _, err := Load(write(t, dir, "llm.yaml", base+"  applyWith: llmsvc\n")); err == nil || !strings.Contains(err.Error(), "applyWith") {
+		t.Fatalf("server.applyWith must be rejected, got %v", err)
 	}
 }
 

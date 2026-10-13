@@ -27,6 +27,12 @@ name: {{cluster}}
 # Where releases land unless a deploy overrides it.
 namespace: models
 
+# Backend a new install uses. Omit, or helm, and swissd runs helmfile. llmsvc
+# creates an LLMService and the operator runs helm; it needs the CRD and the
+# chart's rbac.applyWith set to both or llmsvc. A release already in the
+# cluster stays on the backend that owns it.
+# applyWith: helm
+
 # The model catalogs this site deploys from, each an https base or an absolute
 # path under a name the pages select by. Viewing the catalog or deploying picks
 # one; with a single catalog there is nothing to pick. Set here they win over

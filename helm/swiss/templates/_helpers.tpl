@@ -146,20 +146,10 @@ archived specs.
   verbs: {{ list "get" "list" | toJson }}
 {{- end -}}
 
-{{/* config.applyWith and rbac.applyWith have to agree, or swissd is granted a backend it will not run, or runs one it cannot. */}}
+{{/* rbac.applyWith is the install-time grant. The backend is applyWith on the site profile. */}}
 {{- define "swiss.validateApplyWith" -}}
-{{- $apply := .Values.config.applyWith | default "helm" -}}
 {{- $rbacApply := .Values.rbac.applyWith | default "helm" -}}
-{{- if not (or (eq $apply "helm") (eq $apply "llmsvc")) -}}
-{{- fail (printf "config.applyWith %q must be helm or llmsvc" $apply) -}}
-{{- end -}}
 {{- if not (or (eq $rbacApply "helm") (eq $rbacApply "both") (eq $rbacApply "llmsvc")) -}}
 {{- fail (printf "rbac.applyWith %q must be helm, both or llmsvc" $rbacApply) -}}
-{{- end -}}
-{{- if and (eq $apply "llmsvc") (eq $rbacApply "helm") -}}
-{{- fail "config.applyWith is llmsvc but rbac.applyWith is helm: swissd would write LLMServices without a grant. Set rbac.applyWith to both or llmsvc." -}}
-{{- end -}}
-{{- if and (eq $rbacApply "llmsvc") (eq $apply "helm") -}}
-{{- fail "rbac.applyWith is llmsvc but config.applyWith is helm: swissd would run helm without the deploy grant. Set config.applyWith to llmsvc, or rbac.applyWith to helm or both." -}}
 {{- end -}}
 {{- end -}}
