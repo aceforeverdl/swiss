@@ -20,6 +20,7 @@ under it.
   product.
 
 ### Changed
+- The LLMService backend requires catalog schema v2. A v1 catalog, including one whose `schemaVersion` is unset, is rejected with 400 before any cluster write. `swiss.modelsphere.dev/catalog-schema` records `v1` or `v2` on the LLMService. Helm still installs both.
 - GitHub Actions pinned to commit SHAs.
 - `gpuProducts` is checked against the variant's `requires.gpuProduct`;
   an unlisted product is refused unless `forceGpuProducts` is set. Before, only
