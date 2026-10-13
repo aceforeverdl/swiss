@@ -3,6 +3,7 @@ package server
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -135,9 +136,9 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, "catalog: "+err.Error())
 	}
 	for _, r := range repos {
-		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL), Default: r.Default}
-		if c, err := s.openCatalog(ctx, r.URL); err == nil {
-			ci.Ref = c.Ref
+		ci := catalogInfo{Name: r.Name, URL: r.URL, Source: catalogSource(r.URL, r.SchemaVersion), Default: r.Default}
+		if c, err := s.openCatalog(ctx, r.URL, r.SchemaVersion); err == nil {
+			ci.Ref = c.Ref()
 		} else {
 			info.Warnings = append(info.Warnings, fmt.Sprintf("catalog %s: %v", r.Name, err))
 		}
@@ -181,23 +182,37 @@ func (s *Server) handleCatalog(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	v1, ok := c.(*catalog.V1)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, notServedToTheWeb(repo.Name, c))
+		return
+	}
 	// The index only. A marketplace listing must not cost one fetch per model.
 	writeJSON(w, http.StatusOK, map[string]any{
-		"name": repo.Name, "ref": c.Ref, "source": c.Fetcher.String(), "index": c.Index,
+		"name": repo.Name, "ref": c.Ref(), "source": c.Source(), "index": v1.Index,
 	})
+}
+
+// notServedToTheWeb is the refusal of the listing and model pages for a v2
+// catalog. Their JSON is the v1 index and entry, which is what the web reads;
+// the v2 shape the web gets is not designed yet, and a v1 imitation of it is
+// the compatibility layer v2 is not getting. Plans, installs, upgrades and
+// drift go through catalog.Catalog and work for both.
+func notServedToTheWeb(name string, c catalog.Catalog) string {
+	return fmt.Sprintf("catalog %q is schema %s, which this page does not list yet -- plan and install from it through the API or the CLI", name, c.Schema())
 }
 
 // catalogFor opens the catalog a request names with ?catalog=. Naming none is
 // fine when there is one; with several it is a 400, as is a name that is not
 // configured -- the request is wrong, not the catalog. A catalog that cannot be
 // read is a 502.
-func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.Request) (*catalog.Catalog, site.CatalogRepo, bool) {
+func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.Request) (catalog.Catalog, site.CatalogRepo, bool) {
 	repo, err := s.CatalogRepo(ctx, r.URL.Query().Get("catalog"))
 	if err != nil {
 		writeError(w, http.StatusBadRequest, err.Error())
 		return nil, repo, false
 	}
-	c, err := s.openCatalog(ctx, repo.URL)
+	c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion)
 	if err != nil {
 		writeError(w, http.StatusBadGateway, err.Error())
 		return nil, repo, false
@@ -208,11 +223,16 @@ func (s *Server) catalogFor(ctx context.Context, w http.ResponseWriter, r *http.
 func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := contextWithTimeout(r, 20*time.Second)
 	defer cancel()
-	c, _, ok := s.catalogFor(ctx, w, r)
+	c, repo, ok := s.catalogFor(ctx, w, r)
 	if !ok {
 		return
 	}
-	e, err := c.Entry(ctx, r.PathValue("model"), r.URL.Query().Get("version"))
+	v1, ok := c.(*catalog.V1)
+	if !ok {
+		writeError(w, http.StatusNotImplemented, notServedToTheWeb(repo.Name, c))
+		return
+	}
+	e, err := v1.Entry(ctx, r.PathValue("model"), r.URL.Query().Get("version"))
 	if err != nil {
 		writeError(w, http.StatusNotFound, err.Error())
 		return
@@ -222,7 +242,7 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 	// is what there is to show when the entry's own hf cannot be substituted
 	// into it. Best effort -- an unreadable profile is the profile page's
 	// problem, not this endpoint's.
-	out := map[string]any{"ref": c.Ref, "entry": e}
+	out := map[string]any{"ref": c.Ref(), "entry": e}
 	if prof, err := s.Profile(ctx); err == nil {
 		out["pathTemplate"] = prof.Model.PathTemplate
 		if path, err := prof.LocalPath(e.Source.HF, e.Name); err == nil {
@@ -242,6 +262,35 @@ func (s *Server) handleCatalogModel(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	writeJSON(w, http.StatusOK, out)
+}
+
+// handleCatalogHistory lists a variant's published revisions, newest first, for
+// either schema; ?variant= names one, else the model's default. Each revision
+// is one a plan can name as its version.
+func (s *Server) handleCatalogHistory(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := contextWithTimeout(r, 30*time.Second)
+	defer cancel()
+	c, _, ok := s.catalogFor(ctx, w, r)
+	if !ok {
+		return
+	}
+	model, variant := r.PathValue("model"), r.URL.Query().Get("variant")
+	revs, err := c.History(ctx, model, variant)
+	if err != nil {
+		code := http.StatusBadGateway
+		if errors.As(err, new(*catalog.NotFoundError)) {
+			code = http.StatusNotFound
+		}
+		writeError(w, code, err.Error())
+		return
+	}
+	if variant == "" {
+		m, _ := c.Model(model)
+		variant = m.DefaultVariant
+	}
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ref": c.Ref(), "schema": c.Schema(), "model": model, "variant": variant, "revisions": revs,
+	})
 }
 
 // handleProfile serves the site profile as parsed, not as stored: what swissd
@@ -525,8 +574,8 @@ func (s *Server) handleDeployments(w http.ResponseWriter, r *http.Request) {
 	repos, _ := s.Catalogs(ctx)
 	current := map[string]string{}
 	for _, repo := range repos {
-		if c, err := s.openCatalog(ctx, repo.URL); err == nil {
-			current[repo.Name] = c.Ref
+		if c, err := s.openCatalog(ctx, repo.URL, repo.SchemaVersion); err == nil {
+			current[repo.Name] = c.Ref()
 		}
 	}
 
@@ -643,27 +692,18 @@ func (s *Server) deploymentRow(ctx context.Context, rel cluster.Release) *deploy
 }
 
 // digestDrift is the warning for a version that was rewritten in place: the
-// catalog still lists that version and variant, under a different entry digest
+// catalog still publishes that version and variant, under a different digest
 // than the one this release was composed from. Empty when there is nothing to
 // say, including a plan that predates recording a digest.
-func digestDrift(idx *catalog.Index, model, version, variant, pinned string) string {
-	if idx == nil || model == "" || version == "" || variant == "" || pinned == "" {
+func digestDrift(c catalog.Catalog, model, version, variant, pinned string) string {
+	if c == nil || model == "" || version == "" || variant == "" || pinned == "" {
 		return ""
 	}
-	m, ok := idx.Model(model)
-	if !ok {
+	current, ok := c.Published(model, variant, version)
+	if !ok || current == "" || current == pinned {
 		return ""
 	}
-	iv, err := m.Version(version)
-	if err != nil || iv.Digest == "" || iv.Digest == pinned {
-		return ""
-	}
-	for _, v := range iv.Variants {
-		if v.ID == variant {
-			return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
-		}
-	}
-	return ""
+	return fmt.Sprintf("version %s variant %s: upstream digest changed since this was deployed", version, variant)
 }
 
 // pageParams reads page and perPage, clamped. Anything unparseable is the
