@@ -92,6 +92,14 @@ route:
 nodes:
   # A full GPU node, used to derive cache.maxSlotsPerNode.
   gpusPerNode: 8
+  # Names the catalog's GPU products by node labels, for a vendor install that
+  # does not label its nodes with the catalog's name. Every key=value in a
+  # selector must match; a node matching two products takes the one with more
+  # pairs. The GPU view then reports the catalog's name, and a deploy
+  # restricted to that product may land on the node.
+  # gpuProductAliases:
+  #   Ascend-910B3:
+  #     - accelerator=huawei-Ascend910
 
 # The other clusters' swissd instances, for the nav switcher.
 # sites:

@@ -21,19 +21,60 @@ import (
 const maxFetch = 8 << 20
 
 // Fetcher is where a catalog is read from: a local directory or an https base.
-// Both resolve entry paths relative to where index.json was found, which is what
+// Both resolve entry paths relative to where the index was found, which is what
 // lets the same catalog be served from a checkout, a static bucket or a plain
 // web server with no code change.
 type Fetcher interface {
-	// Index fetches index.json and returns it with the raw bytes it was parsed
-	// from -- the bytes are what the catalog reference is computed over.
-	Index(ctx context.Context) (*Index, []byte, error)
+	// Index fetches the index document's bytes, which are what the catalog
+	// reference is computed over. Parsing is Open's, by Schema.
+	Index(ctx context.Context) ([]byte, error)
 	// Fetch reads one path relative to the index.
 	Fetch(ctx context.Context, rel string) ([]byte, error)
+	// Schema is the schemaVersion the location was configured with: v1, v2,
+	// or "" for unset.
+	Schema() string
 	String() string
 }
 
-// NewFetcher picks an implementation from a location:
+// SchemaV1 and SchemaV2 are the values CatalogRepo.SchemaVersion accepts.
+// Unset is a third answer, not a spelling of v1:
+//
+//	unset, base location     -> index.json, read as v1 (what every site did before v2)
+//	unset, explicit .json    -> read by the document's own apiVersion
+//	v1 / v2                  -> index.json / index-v2.json, and the document must be that schema
+const (
+	SchemaV1 = "v1"
+	SchemaV2 = "v2"
+)
+
+// NormalizeSchema trims s and refuses anything but unset, v1 or v2. Unset stays
+// "" -- see the table above.
+func NormalizeSchema(s string) (string, error) {
+	switch s = strings.TrimSpace(s); s {
+	case "", SchemaV1, SchemaV2:
+		return s, nil
+	default:
+		return "", fmt.Errorf("catalog schemaVersion %q must be v1 or v2", s)
+	}
+}
+
+// indexFileName is the published index document for a schema. An explicit
+// location that already ends in .json bypasses this.
+func indexFileName(schema string) string {
+	if schema == SchemaV2 {
+		return "index-v2.json"
+	}
+	return "index.json"
+}
+
+func namesJSON(loc string) bool {
+	if u, err := url.Parse(loc); err == nil && (u.Scheme == "http" || u.Scheme == "https") {
+		return strings.HasSuffix(u.Path, ".json")
+	}
+	return strings.HasSuffix(loc, ".json")
+}
+
+// NewFetcher picks an implementation from a location, with schemaVersion unset:
 //
 //	https://models.example.com/catalog/      -> https, index.json appended
 //	https://models.example.com/index.json    -> https
@@ -44,6 +85,16 @@ type Fetcher interface {
 // the documents it points at; making the consumer speak git would buy nothing a
 // static file server does not already give it.
 func NewFetcher(loc string) (Fetcher, error) {
+	return NewFetcherWithSchema(loc, "")
+}
+
+// NewFetcherWithSchema is NewFetcher for a site profile's schemaVersion: v2
+// appends index-v2.json where v1 and unset append index.json.
+func NewFetcherWithSchema(loc, schema string) (Fetcher, error) {
+	schema, err := NormalizeSchema(schema)
+	if err != nil {
+		return nil, err
+	}
 	if loc == "" {
 		return nil, fmt.Errorf("no catalog location")
 	}
@@ -53,18 +104,18 @@ func NewFetcher(loc string) (Fetcher, error) {
 			return nil, fmt.Errorf("catalog url %q: %w", loc, err)
 		}
 		if !strings.HasSuffix(u.Path, ".json") {
-			u = u.JoinPath("index.json")
+			u = u.JoinPath(indexFileName(schema))
 		}
-		return &httpSource{index: u, client: &http.Client{Timeout: 30 * time.Second}}, nil
+		return &httpSource{index: u, schema: schema, client: &http.Client{Timeout: 30 * time.Second}}, nil
 	}
 	abs, err := filepath.Abs(loc)
 	if err != nil {
 		return nil, err
 	}
 	if fi, err := os.Stat(abs); err == nil && fi.IsDir() {
-		return &fileSource{index: filepath.Join(abs, "index.json")}, nil
+		return &fileSource{index: filepath.Join(abs, indexFileName(schema)), schema: schema}, nil
 	}
-	return &fileSource{index: abs}, nil
+	return &fileSource{index: abs, schema: schema}, nil
 }
 
 // safeRel rejects an index whose paths would read outside the catalog. The index
@@ -83,18 +134,19 @@ func safeRel(rel string) error {
 	return nil
 }
 
-type fileSource struct{ index string }
+type fileSource struct{ index, schema string }
 
 func (s *fileSource) String() string { return s.index }
 
-func (s *fileSource) Index(ctx context.Context) (*Index, []byte, error) {
+func (s *fileSource) Index(ctx context.Context) ([]byte, error) {
 	b, err := os.ReadFile(s.index)
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog index: %w", err)
+		return nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndex(b)
-	return idx, b, err
+	return b, nil
 }
+
+func (s *fileSource) Schema() string { return s.schema }
 
 func (s *fileSource) Fetch(_ context.Context, rel string) ([]byte, error) {
 	if err := safeRel(rel); err != nil {
@@ -105,19 +157,21 @@ func (s *fileSource) Fetch(_ context.Context, rel string) ([]byte, error) {
 
 type httpSource struct {
 	index  *url.URL
+	schema string
 	client *http.Client
 }
 
 func (s *httpSource) String() string { return s.index.String() }
 
-func (s *httpSource) Index(ctx context.Context) (*Index, []byte, error) {
+func (s *httpSource) Index(ctx context.Context) ([]byte, error) {
 	b, err := s.get(ctx, s.index)
 	if err != nil {
-		return nil, nil, fmt.Errorf("catalog index: %w", err)
+		return nil, fmt.Errorf("catalog index: %w", err)
 	}
-	idx, err := parseIndex(b)
-	return idx, b, err
+	return b, nil
 }
+
+func (s *httpSource) Schema() string { return s.schema }
 
 func (s *httpSource) Fetch(ctx context.Context, rel string) ([]byte, error) {
 	if err := safeRel(rel); err != nil {
@@ -129,12 +183,17 @@ func (s *httpSource) Fetch(ctx context.Context, rel string) ([]byte, error) {
 }
 
 func (s *httpSource) get(ctx context.Context, u *url.URL) ([]byte, error) {
+	return httpGet(ctx, s.client, u)
+}
+
+// httpGet reads one document, capped at maxFetch.
+func httpGet(ctx context.Context, client *http.Client, u *url.URL) ([]byte, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
 	if err != nil {
 		return nil, err
 	}
 	req.Header.Set("Accept", "application/json, application/yaml, text/yaml, */*")
-	resp, err := s.client.Do(req)
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
 	}

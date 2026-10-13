@@ -208,3 +208,44 @@ sites:
 		}
 	}
 }
+
+func TestGPUProductAliases(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+	p, err := Parse([]byte(head+`nodes:
+  gpuProductAliases:
+    Ascend-910B3:
+      - accelerator=huawei-Ascend910
+    " Ascend-910B4 ":
+      - accelerator=huawei-Ascend910, accelerator-type=module-910b4-8
+`), "test")
+	if err != nil {
+		t.Fatalf("a more specific alias may overlap a broader one: %v", err)
+	}
+	if _, ok := p.Nodes.GPUProductAliases["Ascend-910B4"]; !ok {
+		t.Errorf("product names must be trimmed: %v", p.Nodes.GPUProductAliases)
+	}
+	m := p.Nodes.GPUProductAliasesMap()
+	if len(m["Ascend-910B3"]) != 1 || m["Ascend-910B3"][0]["accelerator"] != "huawei-Ascend910" {
+		t.Errorf("unexpected Ascend-910B3: %v", m["Ascend-910B3"])
+	}
+	b4 := m["Ascend-910B4"]
+	if len(b4) != 1 || len(b4[0]) != 2 || b4[0]["accelerator-type"] != "module-910b4-8" {
+		t.Errorf("both pairs of a selector must be kept: %v", b4)
+	}
+
+	for name, aliases := range map[string]string{
+		"not key=value":      "    Ascend-910B3: [accelerator]\n",
+		"empty value":        "    Ascend-910B3: [accelerator=]\n",
+		"key set twice":      "    Ascend-910B3: [\"a=1,a=2\"]\n",
+		"same selector":      "    Ascend-910B3: [accelerator=huawei-Ascend910]\n    Ascend-910B4: [accelerator=huawei-Ascend910]\n",
+		"equal and disjoint": "    Ascend-910B3: [a=1]\n    Ascend-910B4: [b=1]\n",
+		"no selector":        "    Ascend-910B3: []\n",
+		"null selectors":     "    Ascend-910B3:\n",
+		"empty product":      "    \" \": [a=1]\n",
+		"twice once trimmed": "    Ascend-910B3: [a=1]\n    \"Ascend-910B3 \": [a=2,b=1]\n",
+	} {
+		if _, err := Parse([]byte(head+"nodes:\n  gpuProductAliases:\n"+aliases), "test"); err == nil {
+			t.Errorf("%s: must be refused", name)
+		}
+	}
+}

@@ -7,18 +7,15 @@ func TestVendorDefaultsToNvidia(t *testing.T) {
 	if r.VendorOrDefault() != VendorNvidia {
 		t.Fatalf("vendor = %q", r.VendorOrDefault())
 	}
-	if r.ResourceName() != "nvidia.com/gpu" || r.ProductLabel() != "nvidia.com/gpu.product" {
-		t.Fatalf("nvidia mapping wrong: %s / %s", r.ResourceName(), r.ProductLabel())
+	if r.ResourceName() != "nvidia.com/gpu" {
+		t.Fatalf("nvidia mapping wrong: %s", r.ResourceName())
 	}
 }
 
-func TestVendorSelectsTheResourceAndLabel(t *testing.T) {
+func TestVendorSelectsTheResource(t *testing.T) {
 	r := Requires{GPUs: 8, Vendor: "ascend"}
 	if r.ResourceName() != "huawei.com/Ascend910" {
 		t.Fatalf("ascend must not request nvidia.com/gpu, got %q", r.ResourceName())
-	}
-	if r.ProductLabel() == "nvidia.com/gpu.product" {
-		t.Fatal("ascend products are not published under the nvidia label")
 	}
 }
 

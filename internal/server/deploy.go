@@ -137,21 +137,13 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	if err != nil {
 		return nil, err
 	}
-	entry, err := cat.Entry(ctx, req.Model, req.Version)
+	resolved, err := cat.Resolve(ctx, req.Model, req.Variant, req.Version)
 	if err != nil {
 		return nil, err
 	}
-	var v catalog.Variant
-	if req.Variant == "" {
-		v, err = entry.DefaultVariant()
-	} else {
-		v, err = entry.Variant(req.Variant)
-	}
-	if err != nil {
-		return nil, err
-	}
+	v := resolved.Variant
 	if req.movedFrom != nil {
-		if err := s.checkMove(ctx, req.movedFrom, repo.Name, entry, v); err != nil {
+		if err := s.checkMove(ctx, req.movedFrom, repo.Name, resolved); err != nil {
 			return nil, err
 		}
 	}
@@ -175,7 +167,7 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		release = req.ServiceID
 	}
 	if release == "" {
-		release = entry.Name
+		release = resolved.Model
 	}
 
 	overrides := values.Tree{}
@@ -198,19 +190,15 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 		}
 	}
 	// Affinity rather than nodeSelector: nodeSelector ANDs its labels, so it
-	// cannot say "any of these products". A single term with one In expression
-	// is the OR. Set at the nodeSelectorTerms path so a preferred rule sitting
-	// beside it survives.
+	// cannot say "any of these products". Set at the nodeSelectorTerms path so a
+	// preferred rule sitting beside it survives.
 	if len(req.GPUProducts) > 0 {
-		vals := make([]any, 0, len(req.GPUProducts))
-		for _, p := range req.GPUProducts {
-			vals = append(vals, p)
+		res := v.Requires.ResourceName()
+		keys := cluster.ProductLabels(s.cfg.Server.GPUProductLabelsMap())[res]
+		terms := gpuProductTerms(keys, prof.Nodes.GPUProductAliasesMap(), req.GPUProducts)
+		if len(terms) == 0 {
+			return nil, fmt.Errorf("no node label to match GPU products on for %s -- set server.gpuProductLabels, or nodes.gpuProductAliases in the site profile", res)
 		}
-		terms := []any{values.Tree{"matchExpressions": []any{values.Tree{
-			"key":      v.Requires.ProductLabel(),
-			"operator": "In",
-			"values":   vals,
-		}}}}
 		const path = "affinity.nodeAffinity.requiredDuringSchedulingIgnoredDuringExecution.nodeSelectorTerms"
 		if err := values.Set(overrides, path, terms); err != nil {
 			return nil, err
@@ -234,11 +222,11 @@ func (s *Server) compose(ctx context.Context, req planRequest) (*plan.Plan, erro
 	}
 
 	p, err := compose.Compose(compose.Input{
-		Catalog:         cat.Fetcher.String(),
+		Catalog:         cat.Source(),
 		CatalogName:     repo.Name,
-		Ref:             cat.Ref,
-		Entry:           entry,
-		Variant:         v,
+		Ref:             cat.Ref(),
+		Schema:          cat.Schema(),
+		Resolved:        resolved,
 		ChartVersion:    chartVersion,
 		Profile:         *prof,
 		Release:         release,
@@ -334,7 +322,7 @@ func (s *Server) carryForward(ctx context.Context, req planRequest) (planRequest
 // checkMove refuses a cross-catalog upgrade that would put another model, or the
 // same one on another engine, behind the release's existing serviceId and route.
 // Model ids are only unique within a catalog; HF is the identity across them.
-func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entry catalog.Entry, v catalog.Variant) error {
+func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, r catalog.Resolved) error {
 	refuse := func(format string, args ...any) error {
 		return fmt.Errorf("cannot move %s to catalog %q: %s -- deploy a new release instead", prev.Release.Name, to, fmt.Sprintf(format, args...))
 	}
@@ -345,11 +333,11 @@ func (s *Server) checkMove(ctx context.Context, prev *plan.Plan, to string, entr
 			return refuse("its plan predates recording the model's HF repo, and its own catalog could not supply it (%v)", err)
 		}
 	}
-	if entry.Source.HF != hf {
-		return refuse("%s there is %s, not %s, so it is a different model", entry.Name, entry.Source.HF, hf)
+	if r.Source.HF != hf {
+		return refuse("%s there is %s, not %s, so it is a different model", r.Model, r.Source.HF, hf)
 	}
-	if v.Engine != prev.Engine {
-		return refuse("variant %s runs on %s there, not %s", v.ID, v.Engine, prev.Engine)
+	if r.Variant.Engine != prev.Engine {
+		return refuse("variant %s runs on %s there, not %s", r.Variant.ID, r.Variant.Engine, prev.Engine)
 	}
 	return nil
 }
@@ -378,6 +366,36 @@ func clusterProducts(nodes []cluster.Node, r catalog.Requires) map[string]bool {
 	return out
 }
 
+// gpuProductTerms is one term per label key inventory reads a product from, and
+// one per alias of a requested product, so a deploy can land wherever inventory
+// reports the product. Terms are ORed; an alias's labels are ANDed.
+func gpuProductTerms(keys []string, aliases map[string][]map[string]string, products []string) []any {
+	var terms []any
+	for _, key := range keys {
+		if key = strings.TrimSpace(key); key != "" {
+			vals := make([]any, 0, len(products))
+			for _, p := range products {
+				vals = append(vals, p)
+			}
+			terms = append(terms, values.Tree{"matchExpressions": []any{inExpr(key, vals)}})
+		}
+	}
+	for _, p := range products {
+		for _, sel := range aliases[p] {
+			exprs := make([]any, 0, len(sel))
+			for _, k := range slices.Sorted(maps.Keys(sel)) {
+				exprs = append(exprs, inExpr(k, []any{sel[k]}))
+			}
+			terms = append(terms, values.Tree{"matchExpressions": exprs})
+		}
+	}
+	return terms
+}
+
+func inExpr(key string, vals []any) values.Tree {
+	return values.Tree{"key": key, "operator": "In", "values": vals}
+}
+
 // checkGPUProducts refuses requested products the variant does not list, unless
 // forced; a forced product must be on the cluster. Listed products are never
 // checked against the cluster, forced or not, so forcing only ever widens what
@@ -400,7 +418,7 @@ func (s *Server) checkGPUProducts(ctx context.Context, v catalog.Variant, produc
 		return nil, fmt.Errorf("variant %s supports GPU products %s, not %s -- set forceGpuProducts to deploy on a product on this cluster that the catalog does not list",
 			v.ID, strings.Join(listed, ", "), strings.Join(off, ", "))
 	}
-	nodes, err := s.probe.Nodes(ctx)
+	nodes, err := s.nodes(ctx)
 	if err != nil {
 		return nil, &gpuInventoryError{err}
 	}
@@ -447,7 +465,7 @@ func (s *Server) recordedHF(ctx context.Context, prev *plan.Plan) (string, error
 	if err != nil {
 		return "", err
 	}
-	m, ok := cat.Index.Model(prev.Source.Model)
+	m, ok := cat.Model(prev.Source.Model)
 	if !ok || m.Source.HF == "" {
 		return "", fmt.Errorf("catalog %q has no %s", name, prev.Source.Model)
 	}

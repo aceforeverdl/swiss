@@ -8,7 +8,9 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -361,9 +363,8 @@ func (k *Kube) Ping(ctx context.Context) error {
 
 // DefaultGPUProductLabels maps extended resource names (GPU count keys) to the
 // node label that names each SKU under that vendor. Order matters: first
-// matching non-empty label wins. Values must match Requires.ProductLabel so
-// inventory and deploy affinity read the same key; site-specific alternates
-// belong in server.gpuProductLabels, not here.
+// matching non-empty label wins. Deploy affinity matches on the same keys;
+// site-specific alternates belong in server.gpuProductLabels, not here.
 var DefaultGPUProductLabels = map[string][]string{
 	"nvidia.com/gpu":       {"nvidia.com/gpu.product"},
 	"huawei.com/Ascend910": {"accelerator/huawei-ascend910", "accelerator"},
@@ -372,15 +373,17 @@ var DefaultGPUProductLabels = map[string][]string{
 	"amd.com/gpu":          {"amd.com/gpu.device-id"},
 }
 
-func (k *Kube) productLabels() map[string][]string {
-	if len(k.GPUProductLabels) == 0 {
+// ProductLabels is DefaultGPUProductLabels with site's entries replacing
+// theirs, per resource.
+func ProductLabels(site map[string][]string) map[string][]string {
+	if len(site) == 0 {
 		return DefaultGPUProductLabels
 	}
-	merged := make(map[string][]string, len(DefaultGPUProductLabels)+len(k.GPUProductLabels))
+	merged := make(map[string][]string, len(DefaultGPUProductLabels)+len(site))
 	for r, l := range DefaultGPUProductLabels {
 		merged[r] = l
 	}
-	for r, l := range k.GPUProductLabels {
+	for r, l := range site {
 		r = strings.TrimSpace(r)
 		if r != "" {
 			merged[r] = l
@@ -388,6 +391,8 @@ func (k *Kube) productLabels() map[string][]string {
 	}
 	return merged
 }
+
+func (k *Kube) productLabels() map[string][]string { return ProductLabels(k.GPUProductLabels) }
 
 func (k *Kube) gpuProduct(labels map[string]string, res string) string {
 	if res == "" || len(labels) == 0 {
@@ -403,6 +408,45 @@ func (k *Kube) gpuProduct(labels map[string]string, res string) string {
 		}
 	}
 	return ""
+}
+
+// ApplyGPUProductAliases renames each GPU node an alias matches (the site
+// profile's nodes.gpuProductAliases); an alias wins over the product label.
+func ApplyGPUProductAliases(nodes []Node, aliases map[string][]map[string]string) {
+	if len(aliases) == 0 {
+		return
+	}
+	for i := range nodes {
+		if nodes[i].GPUResource == "" {
+			continue
+		}
+		if p := aliasedProduct(aliases, nodes[i].Labels); p != "" {
+			nodes[i].GPUProduct = p
+		}
+	}
+}
+
+// aliasedProduct is the product whose selector matches with the most pairs;
+// profile validation rules out a tie.
+func aliasedProduct(aliases map[string][]map[string]string, labels map[string]string) string {
+	best, most := "", 0
+	for _, product := range slices.Sorted(maps.Keys(aliases)) {
+		for _, sel := range aliases[product] {
+			if len(sel) > most && hasLabels(labels, sel) {
+				best, most = product, len(sel)
+			}
+		}
+	}
+	return best
+}
+
+func hasLabels(labels, want map[string]string) bool {
+	for k, v := range want {
+		if labels[k] != v {
+			return false
+		}
+	}
+	return true
 }
 
 func (k *Kube) gpuResources() []string {
