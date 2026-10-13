@@ -85,6 +85,7 @@ func annotations(p *plan.Plan, action, note string) map[string]string {
 	put(AnnCatalog, p.Source.Catalog)
 	put(AnnCatalogName, p.Source.CatalogName)
 	put(AnnCatalogRef, p.Source.Ref)
+	put(AnnCatalogSchema, catalogSchema(p))
 	put(AnnEntryDigest, p.Source.Digest)
 	put(AnnProfile, p.Profile)
 	put(AnnAction, action)
@@ -93,6 +94,24 @@ func annotations(p *plan.Plan, action, note string) map[string]string {
 		return nil
 	}
 	return ann
+}
+
+// catalogSchema is the catalog repo's schema version. A plan records v2 on
+// Source.Schema and leaves v1 absent, so the annotation spells both.
+func catalogSchema(p *plan.Plan) string {
+	if p.Source.Schema == "v2" {
+		return "v2"
+	}
+	return "v1"
+}
+
+// schemaFromAnnotation is the inverse. Source.Schema stores v2 only; v1 is
+// the absent value compose writes, so the annotation's "v1" reads back as "".
+func schemaFromAnnotation(s string) string {
+	if s == "v2" {
+		return "v2"
+	}
+	return ""
 }
 
 // IsExternal reports an LLMService swiss did not write: none of its annotations
@@ -145,6 +164,7 @@ func ToPlan(u *unstructured.Unstructured) (*plan.Plan, error) {
 			CatalogName: ann[AnnCatalogName],
 			Ref:         ann[AnnCatalogRef],
 			Digest:      ann[AnnEntryDigest],
+			Schema:      schemaFromAnnotation(ann[AnnCatalogSchema]),
 		},
 		Chart: plan.ChartRef{
 			Name:    obj.Spec.Chart.Name,

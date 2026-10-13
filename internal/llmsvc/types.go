@@ -32,14 +32,15 @@ const (
 
 	SwissAnnotationPrefix = "swiss.modelsphere.dev/"
 
-	AnnPlanHash    = SwissAnnotationPrefix + "plan-hash"
-	AnnCatalog     = SwissAnnotationPrefix + "catalog"
-	AnnCatalogName = SwissAnnotationPrefix + "catalog-name"
-	AnnCatalogRef  = SwissAnnotationPrefix + "catalog-ref"
-	AnnEntryDigest = SwissAnnotationPrefix + "entry-digest"
-	AnnProfile     = SwissAnnotationPrefix + "profile"
-	AnnAction      = SwissAnnotationPrefix + "action"
-	AnnNote        = SwissAnnotationPrefix + "note"
+	AnnPlanHash      = SwissAnnotationPrefix + "plan-hash"
+	AnnCatalog       = SwissAnnotationPrefix + "catalog"
+	AnnCatalogName   = SwissAnnotationPrefix + "catalog-name"
+	AnnCatalogRef    = SwissAnnotationPrefix + "catalog-ref"
+	AnnCatalogSchema = SwissAnnotationPrefix + "catalog-schema"
+	AnnEntryDigest   = SwissAnnotationPrefix + "entry-digest"
+	AnnProfile       = SwissAnnotationPrefix + "profile"
+	AnnAction        = SwissAnnotationPrefix + "action"
+	AnnNote          = SwissAnnotationPrefix + "note"
 
 	AnnDeletionPolicy = Group + "/deletion-policy"
 	AnnForceConflicts = Group + "/force-conflicts"

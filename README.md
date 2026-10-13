@@ -68,7 +68,7 @@ PUT  /api/profile
 POST /api/plans /api/diff /api/apply /api/install     (allowDeploy only)
 ```
 
-`server.applyWith` chooses the backend for a new install: `helm` (the default) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/swiss-design.md](docs/swiss-design.md).
+`server.applyWith` chooses the backend for a new install: `helm` (the default) or `llmsvc` when the LLMService CRD is served. A release already in the cluster stays on the backend that owns it. `llmsvc` requires catalog schema v2; a v1 repo (`schemaVersion` unset counts as v1) is rejected with 400 and nothing is written. Helm accepts v1 and v2. The CLI `swiss install` and `swiss apply` stay on helm. See [docs/swiss-design.md](docs/swiss-design.md).
 
 ## Deploy
 

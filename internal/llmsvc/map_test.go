@@ -132,14 +132,15 @@ func TestAnnotationsAreExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := map[string]string{
-		"swiss.modelsphere.dev/plan-hash":    p.Hash,
-		"swiss.modelsphere.dev/catalog":      p.Source.Catalog,
-		"swiss.modelsphere.dev/catalog-name": p.Source.CatalogName,
-		"swiss.modelsphere.dev/catalog-ref":  p.Source.Ref,
-		"swiss.modelsphere.dev/entry-digest": p.Source.Digest,
-		"swiss.modelsphere.dev/profile":      p.Profile,
-		"swiss.modelsphere.dev/action":       "upgrade",
-		"swiss.modelsphere.dev/note":         "bump to 1.1.0",
+		"swiss.modelsphere.dev/plan-hash":      p.Hash,
+		"swiss.modelsphere.dev/catalog":        p.Source.Catalog,
+		"swiss.modelsphere.dev/catalog-name":   p.Source.CatalogName,
+		"swiss.modelsphere.dev/catalog-ref":    p.Source.Ref,
+		"swiss.modelsphere.dev/catalog-schema": "v1",
+		"swiss.modelsphere.dev/entry-digest":   p.Source.Digest,
+		"swiss.modelsphere.dev/profile":        p.Profile,
+		"swiss.modelsphere.dev/action":         "upgrade",
+		"swiss.modelsphere.dev/note":           "bump to 1.1.0",
 	}
 	if !reflect.DeepEqual(u.GetAnnotations(), want) {
 		t.Fatalf("annotations\n got %#v\nwant %#v", u.GetAnnotations(), want)
@@ -161,6 +162,56 @@ func TestAnnotationsAreExact(t *testing.T) {
 	}
 	if IsExternal(u) {
 		t.Fatal("a swiss-written object is not external")
+	}
+}
+
+func TestCatalogSchemaAnnotation(t *testing.T) {
+	v1 := realistic(t)
+	if v1.Source.Schema != "" {
+		t.Fatalf("v1 fixture records a schema: %q", v1.Source.Schema)
+	}
+	u, err := FromPlan(v1, "install", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := u.GetAnnotations()[AnnCatalogSchema]; got != "v1" {
+		t.Fatalf("catalog-schema %q, want v1", got)
+	}
+	back, err := ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Source.Schema != "" {
+		t.Fatalf("v1 reads back as an absent source.schema, got %q", back.Source.Schema)
+	}
+
+	v2 := realistic(t)
+	v2.Source.Schema = "v2"
+	if err := v2.ComputeHash(); err != nil {
+		t.Fatal(err)
+	}
+	u = assertRoundTrip(t, v2, "install", "")
+	if got := u.GetAnnotations()[AnnCatalogSchema]; got != "v2" {
+		t.Fatalf("catalog-schema %q, want v2", got)
+	}
+	back, err = ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Source.Schema != "v2" {
+		t.Fatalf("source.schema %q, want v2", back.Source.Schema)
+	}
+
+	// An object written before the annotation is still a v1 plan.
+	ann := u.GetAnnotations()
+	delete(ann, AnnCatalogSchema)
+	u.SetAnnotations(ann)
+	back, err = ToPlan(u)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if back.Source.Schema != "" {
+		t.Fatalf("missing annotation reads as v1, got %q", back.Source.Schema)
 	}
 }
 
@@ -346,22 +397,22 @@ func realistic(t *testing.T) *plan.Plan {
 		Catalog:     "https://example.invalid/swiss-catalog/index.json",
 		CatalogName: "public",
 		Ref:         "0123456789abcdef0123456789abcdef01234567",
-		Entry: catalog.Entry{
-			APIVersion: catalog.APIVersion,
-			Name:       "qwen3.6-35b-a3b",
+		Resolved: catalog.Resolved{
+			Model:      "qwen3.6-35b-a3b",
+			Source:     catalog.Source{HF: "Qwen/Qwen3.6-35B-A3B"},
+			ServedName: "qwen",
 			Version:    "1.1.0",
 			Digest:     "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-			Source:     catalog.Source{HF: "Qwen/Qwen3.6-35B-A3B"},
-		},
-		Variant: catalog.Variant{
-			ID:       "sglang-tp2-h100",
-			Engine:   "sglang",
-			Chart:    catalog.Chart{Name: "sglang", Version: "0.8.6"},
-			Image:    &catalog.Image{Repository: "lmsysorg/sglang", Tag: "v0.5.9"},
-			Requires: catalog.Requires{GPUs: 2},
-			Values: values.Tree{
-				"extraArgs": []any{"--tp-size=2"},
-				"model":     map[string]any{"mountPath": "/model"},
+			Variant: catalog.Variant{
+				ID:       "sglang-tp2-h100",
+				Engine:   "sglang",
+				Chart:    catalog.Chart{Name: "sglang", Version: "0.8.6"},
+				Image:    &catalog.Image{Repository: "lmsysorg/sglang", Tag: "v0.5.9"},
+				Requires: catalog.Requires{GPUs: 2},
+				Values: values.Tree{
+					"extraArgs": []any{"--tp-size=2"},
+					"model":     map[string]any{"mountPath": "/model"},
+				},
 			},
 		},
 		Profile: site.Profile{

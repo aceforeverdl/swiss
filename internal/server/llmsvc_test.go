@@ -40,6 +40,22 @@ import (
 const llmRelease = "qwen-new"
 
 func llmProbe() cluster.Fake {
+	root, err := filepath.Abs(filepath.Join("..", "..", "testdata", "catalog-v2"))
+	if err != nil {
+		root = filepath.Join("..", "..", "testdata", "catalog-v2")
+	}
+	p := fakeProbe()
+	p.Maps["swiss/site-profile"] = map[string]string{
+		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\ncatalogs:\n  - name: next\n    url: " + root + "\n    schemaVersion: v2\n",
+	}
+	p.Secrets = map[string]map[string]string{}
+	p.SecretLabels = map[string]map[string]string{}
+	return p
+}
+
+// v1ChartProbe is the public v1 catalog (schemaVersion unset, which is v1)
+// with a chart repo, so a plan composes and helm can run.
+func v1ChartProbe() cluster.Fake {
 	p := fakeProbe()
 	p.Maps["swiss/site-profile"] = map[string]string{
 		"profile.yaml": profileYAML + "chartRepo: oci://ghcr.io/modelsphere/charts\n",
@@ -345,7 +361,13 @@ func nestedString(u *unstructured.Unstructured, fields ...string) string {
 func (r *llmRig) storePlan(t *testing.T, fields map[string]any) string {
 	t.Helper()
 	if fields["model"] == nil {
-		fields["model"] = "qwen3.6-35b-a3b"
+		fields["model"] = "qwen3-8b"
+	}
+	if fields["variant"] == nil {
+		fields["variant"] = "vllm-tp1-910b"
+	}
+	if fields["chartVersion"] == nil {
+		fields["chartVersion"] = "0.7.6"
 	}
 	code, out := post(t, r.srv, "/api/plans", fields)
 	if code != 200 {
@@ -461,14 +483,14 @@ func TestLLMInstall(t *testing.T) {
 	}
 
 	u, obj := rig.mustGet(t, "models", llmRelease)
-	if obj.Spec.Model == nil || obj.Spec.Model.Name != "qwen3.6-35b-a3b" || obj.Spec.Model.Variant != "sglang-tp2-h100" {
+	if obj.Spec.Model == nil || obj.Spec.Model.Name != "qwen3-8b" || obj.Spec.Model.Variant != "vllm-tp1-910b" {
 		t.Fatalf("model %+v", obj.Spec.Model)
 	}
-	if obj.Spec.Chart.Repo != "oci://ghcr.io/modelsphere/charts" || obj.Spec.Chart.Version != "0.7.1" || obj.Spec.Chart.Name != "sglang" {
+	if obj.Spec.Chart.Repo != "oci://ghcr.io/modelsphere/charts" || obj.Spec.Chart.Version != "0.7.6" || obj.Spec.Chart.Name != "vllm" {
 		t.Fatalf("chart %+v", obj.Spec.Chart)
 	}
 	anns := u.GetAnnotations()
-	if anns[llmsvc.AnnAction] != "install" || anns[llmsvc.AnnNote] != "first" || anns[llmsvc.AnnPlanHash] != hash {
+	if anns[llmsvc.AnnAction] != "install" || anns[llmsvc.AnnNote] != "first" || anns[llmsvc.AnnPlanHash] != hash || anns[llmsvc.AnnCatalogSchema] != "v2" {
 		t.Fatalf("annotations %v", anns)
 	}
 	if obj.Status == nil || obj.Status.Phase != llmsvc.PhaseApplied || obj.Status.Helm == nil || obj.Status.Helm.Revision != 1 {
@@ -592,9 +614,12 @@ func TestApplyWithHelmStaysOnHelmWhenCRDServed(t *testing.T) {
 		t.Fatalf("llmservice %v", info)
 	}
 	hash := rig.storePlan(t, map[string]any{"release": llmRelease})
-	code, _ = post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
+	code, out := post(t, rig.srv, "/api/install", map[string]any{"planHash": hash})
 	if code != http.StatusInternalServerError {
-		t.Fatalf("status %d", code)
+		t.Fatalf("status %d %v", code, out)
+	}
+	if strings.Contains(errText(out), "catalog schema") {
+		t.Fatalf("helm accepts schema v2: %v", out)
 	}
 	if _, ok := rig.w.written[planRef("models", llmRelease)]; !ok {
 		t.Fatal("applyWith helm writes the plan ConfigMap")
@@ -866,7 +891,7 @@ func TestLLMRevisions(t *testing.T) {
 		t.Fatalf("install %d %v", code, out)
 	}
 	legacy, err := rig.s.compose(t.Context(), planRequest{
-		Model: "qwen3.6-35b-a3b", Release: llmRelease,
+		Model: "qwen3-8b", Variant: "vllm-tp1-910b", ChartVersion: "0.7.6", Release: llmRelease,
 		Overrides: values.Tree{"replicaCount": 9},
 	})
 	if err != nil {
@@ -890,10 +915,10 @@ func TestLLMRevisions(t *testing.T) {
 	}
 	cur := revs[0].(map[string]any)
 	old := revs[1].(map[string]any)
-	if asNum(cur["revision"]) != 1 || cur["current"] != true || cur["model"] != "qwen3.6-35b-a3b" || cur["planHash"] != hash {
+	if asNum(cur["revision"]) != 1 || cur["current"] != true || cur["model"] != "qwen3-8b" || cur["planHash"] != hash {
 		t.Fatalf("history row %v", cur)
 	}
-	if cur["chart"] != "sglang-0.7.1" || cur["variant"] != "sglang-tp2-h100" || cur["version"] != "1.1.0" {
+	if cur["chart"] != "vllm-0.7.6" || cur["variant"] != "vllm-tp1-910b" || cur["version"] != "1.0.0" {
 		t.Fatalf("controllerrevision did not fill the row: %v", cur)
 	}
 	if asNum(old["revision"]) != 9 || old["current"] == true || old["planHash"] != legacy.Hash {

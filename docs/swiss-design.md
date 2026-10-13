@@ -232,6 +232,8 @@ Ownership is read off the cluster. An unserved CRD makes an LLMService invisible
 
 A `chartPath` plan is refused with 400 when the llmsvc backend would run it. The operator has no filesystem path. An LLMService with no `swiss.modelsphere.dev/` annotation is external: status, probe and chat still read it, and upgrade is refused.
 
+The llmsvc backend installs, upgrades and rolls back only a catalog repo at schema v2. v1, including a repo whose `schemaVersion` is unset, is refused with 400 before any namespace or object is written: `LLMService backend requires catalog schema v2; catalog repo <name> uses v1; use the helm backend or migrate the catalog to v2`. Helm keeps accepting v1 and v2. `FromPlan` records the version on `swiss.modelsphere.dev/catalog-schema` (`v1` or `v2`). `ToPlan` reads `v2` back onto `source.schema`; `v1` stays absent there, which is how a v1 plan is written.
+
 An upgrade keeps every annotation outside `swiss.modelsphere.dev/`, replaces that prefix from the plan (a stale note is dropped), and removes `serving.modelsphere.dev/force-conflicts` unless this apply sets it. The generation that annotation names comes from the spec. Annotation-only writes leave it where it is.
 
 `/api/deployments` is the union of `swiss-plan-*` refs and LLMServices, sorted and paged as before. Each row has `backend`. External rows set `external`. Rows found under both set `cleanupPending` and say the clean-up is unfinished. With the CRD absent the list is the helm list plus `"backend": "helm"`.

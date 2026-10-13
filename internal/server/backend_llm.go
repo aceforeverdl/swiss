@@ -15,6 +15,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/types"
 
+	"github.com/modelsphere/swiss/internal/catalog"
 	"github.com/modelsphere/swiss/internal/exec"
 	"github.com/modelsphere/swiss/internal/llmsvc"
 	"github.com/modelsphere/swiss/internal/plan"
@@ -150,6 +151,9 @@ func (b llmBackend) Archived(ctx context.Context, ns, release string, rev int) (
 }
 
 func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o applyOpts) (applyResult, error) {
+	if err := b.requireCatalogV2(ctx, p); err != nil {
+		return applyResult{}, err
+	}
 	if p.Chart.Path != "" {
 		return applyResult{}, failErr(http.StatusBadRequest, llmsvc.ErrChartPath)
 	}
@@ -357,6 +361,27 @@ func (b llmBackend) patchForce(ctx context.Context, ns, name string, generation 
 		return nil, err
 	}
 	return b.s.llms.Patch(ctx, ns, name, types.JSONPatchType, payload)
+}
+
+// requireCatalogV2 refuses the llmsvc backend unless the catalog repo this
+// plan belongs to is schema v2. Unset schemaVersion is v1. Helm is not checked.
+// The lookup is a read; a refusal returns before any namespace or object write.
+func (b llmBackend) requireCatalogV2(ctx context.Context, p *plan.Plan) error {
+	if p == nil {
+		return fail(http.StatusBadRequest, "nil plan")
+	}
+	repo, err := b.s.ReleaseCatalog(ctx, p.Source.CatalogName, p.Source.Catalog)
+	if err != nil {
+		return failErr(http.StatusBadRequest, err)
+	}
+	schema := strings.TrimSpace(repo.SchemaVersion)
+	if schema == "" {
+		schema = catalog.SchemaV1
+	}
+	if schema != catalog.SchemaV2 {
+		return fail(http.StatusBadRequest, "LLMService backend requires catalog schema v2; catalog repo %s uses %s; use the helm backend or migrate the catalog to v2", repo.Name, schema)
+	}
+	return nil
 }
 
 // fromPlanStatus is 400 for a plan llmsvc cannot represent and 500 otherwise.
