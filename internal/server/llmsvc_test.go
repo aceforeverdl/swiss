@@ -125,9 +125,9 @@ func startRig(t *testing.T, probe cluster.Fake, served, operator bool, applyWith
 	if probe.SecretLabels == nil {
 		probe.SecretLabels = map[string]map[string]string{}
 	}
+	profileApplyWith(probe, applyWith)
 	cfg := testConfig("prod-b300")
 	cfg.Server.AllowDeploy = true
-	cfg.Server.ApplyWith = applyWith
 	cfg.Server.HelmBin = failBin(t, "helm")
 	cfg.Server.HelmfileBin = failBin(t, "helmfile")
 	s := New(cfg, probe, discardLogger(), "test")
@@ -358,6 +358,56 @@ func nestedString(u *unstructured.Unstructured, fields ...string) string {
 	return s
 }
 
+// profileApplyWith stamps the site profile's applyWith. Empty and helm leave
+// the document alone: that is the default.
+func profileApplyWith(p cluster.Fake, applyWith string) {
+	if applyWith == "" || applyWith == backendHelm {
+		return
+	}
+	m := p.Maps["swiss/site-profile"]
+	if m == nil {
+		return
+	}
+	m["profile.yaml"] += "applyWith: " + applyWith + "\n"
+}
+
+// rewriteRevisionSchema changes the catalog-schema annotation on an archived
+// ControllerRevision, leaving the spec bytes alone. The plan hash does not
+// cover source.schema, so the archive still verifies; ToPlan reads the
+// annotation back as the plan's schema. Empty schema deletes the annotation,
+// which is how a v1 plan is stored.
+func rewriteRevisionSchema(t *testing.T, rig *llmRig, ns, release string, rev int, schema string) {
+	t.Helper()
+	crName := fmt.Sprintf("%s-%d", release, rev)
+	cr, err := rig.kube.AppsV1().ControllerRevisions(ns).Get(t.Context(), crName, metav1.GetOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		Spec        json.RawMessage   `json:"spec"`
+		Annotations map[string]string `json:"annotations"`
+	}
+	if err := json.Unmarshal(cr.Data.Raw, &doc); err != nil {
+		t.Fatal(err)
+	}
+	if doc.Annotations == nil {
+		t.Fatal("revision has no annotations")
+	}
+	if schema == "" {
+		delete(doc.Annotations, llmsvc.AnnCatalogSchema)
+	} else {
+		doc.Annotations[llmsvc.AnnCatalogSchema] = schema
+	}
+	raw, err := json.Marshal(doc)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cr.Data.Raw = raw
+	if _, err := rig.kube.AppsV1().ControllerRevisions(ns).Update(t.Context(), cr, metav1.UpdateOptions{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func (r *llmRig) storePlan(t *testing.T, fields map[string]any) string {
 	t.Helper()
 	if fields["model"] == nil {
@@ -581,7 +631,7 @@ func TestLLMApplyWithFallsBackWhenCRDUnserved(t *testing.T) {
 	}
 	found := false
 	for _, w := range warningsOf(body) {
-		if w == "server.applyWith is llmsvc but the LLMService CRD is not served; new installs use helm" {
+		if w == "site profile applyWith is llmsvc but the LLMService CRD is not served; new installs use helm" {
 			found = true
 		}
 	}
@@ -1192,6 +1242,7 @@ func TestLLMChartRepoRefused(t *testing.T) {
 	rig := startRig(t, llmProbe(), true, false, backendLLMSVC)
 	_, err := (llmBackend{rig.s}).Apply(t.Context(), &plan.Plan{
 		Release: plan.Release{Name: llmRelease, Namespace: "models"},
+		Source:  plan.SourceRef{Schema: "v2"},
 		Chart:   plan.ChartRef{Name: "sglang"},
 	}, exec.Install, applyOpts{Action: "install"})
 	var hf *httpFailure

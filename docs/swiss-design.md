@@ -201,11 +201,11 @@ variants:
 
 A release is stored either as a helm release swiss drives itself, or as an LLMService the operator drives. Handlers call one backend and stop there. `internal/llmsvc` is the mapping and the client.
 
-`server.applyWith` picks the backend for a **new** install. A release already in the cluster stays on the backend that owns it.
+`applyWith` on the site profile picks the backend for a **new** install. Empty means helm. A release already in the cluster stays on the backend that owns it. It is a property of the cluster, so it lives in the profile an operator edits from the web rather than in swissd's config, which takes a helm upgrade.
 
-| `server.applyWith` | CRD served | new install |
+| profile `applyWith` | CRD served | new install |
 | --- | --- | --- |
-| `helm` (default) | either | helm |
+| `helm` (default, also when omitted) | either | helm |
 | `llmsvc` | yes | llmsvc |
 | `llmsvc` | no | helm, and `/api/cluster` carries a warning |
 
@@ -232,7 +232,7 @@ Ownership is read off the cluster. An unserved CRD makes an LLMService invisible
 
 A `chartPath` plan is refused with 400 when the llmsvc backend would run it. The operator has no filesystem path. An LLMService with no `swiss.modelsphere.dev/` annotation is external: status, probe and chat still read it, and upgrade is refused.
 
-The llmsvc backend installs, upgrades and rolls back only a catalog repo at schema v2. v1, including a repo whose `schemaVersion` is unset, is refused with 400 before any namespace or object is written: `LLMService backend requires catalog schema v2; catalog repo <name> uses v1; use the helm backend or migrate the catalog to v2`. Helm keeps accepting v1 and v2. `FromPlan` records the version on `swiss.modelsphere.dev/catalog-schema` (`v1` or `v2`). `ToPlan` reads `v2` back onto `source.schema`; `v1` stays absent there, which is how a v1 plan is written.
+The llmsvc backend installs, upgrades and rolls back only a plan whose `source.schema` is v2. Empty means v1: a plan composed from a v1 repo (unset `schemaVersion` counts as v1) and every plan stored before v2. That plan is refused with 400 before any namespace or object is written: `LLMService backend requires catalog schema v2; this plan records schema v1; use the helm backend or migrate the catalog to v2`. The gate reads the plan being written, so a rollback uses the archived plan's schema after the site profile renames that catalog or points its name at a different repo. Helm keeps accepting v1 and v2. `FromPlan` records the version on `swiss.modelsphere.dev/catalog-schema` (`v1` or `v2`). `ToPlan` reads `v2` back onto `source.schema`; `v1` stays absent there, which is how a v1 plan is written.
 
 An upgrade keeps every annotation outside `swiss.modelsphere.dev/`, replaces that prefix from the plan (a stale note is dropped), and removes `serving.modelsphere.dev/force-conflicts` unless this apply sets it. The generation that annotation names comes from the spec. Annotation-only writes leave it where it is.
 
@@ -244,7 +244,7 @@ An upgrade keeps every annotation outside `swiss.modelsphere.dev/`, replaces tha
 "llmservice": {"served": true, "applyWith": "llmsvc", "newInstalls": "llmsvc"}
 ```
 
-`served` is API discovery. `newInstalls` is the backend a new install will actually use. A discovery failure is cached as not served, logged once per TTL, and warned on `/api/cluster`. `Forbidden` on get or list is cached the same way: the CRD still counts as served, LLMServices stay invisible, and the page warns `LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith`. With `server.applyWith: llmsvc`, either case installs with helm.
+`served` is API discovery. `newInstalls` is the backend a new install will actually use. A discovery failure is cached as not served, logged once per TTL, and warned on `/api/cluster`. `Forbidden` on get or list is cached the same way: the CRD still counts as served, LLMServices stay invisible, and the page warns `LLMService CRD is served but swissd has no llmservices grant; set rbac.applyWith`. With `applyWith: llmsvc` on the site profile, either case installs with helm.
 
 `POST /api/diff` stays helmfile for both backends and still returns the live helm revision and whether that release exists.
 
@@ -257,7 +257,7 @@ Deferred:
 
 ## RBAC
 
-The chart's deploy switch is `config.allowDeploy`. It gates the write endpoints and the write grant together. `config.applyWith` is the new-install backend (`helm` or `llmsvc`), rendered as `server.applyWith`. `helm` is left out of the rendered config because it is already swissd's default. `rbac.applyWith` chooses the grant on the release Role, or the releases ClusterRole when `rbac.scope` is `cluster`.
+The chart's deploy switch is `config.allowDeploy`. It gates the write endpoints and the write grant together. The backend a new install uses is `applyWith` on the site profile (`helm` or `llmsvc`; omitted means helm), not a value in this chart. `rbac.applyWith` chooses the grant on the release Role, or the releases ClusterRole when `rbac.scope` is `cluster`.
 
 | `config.allowDeploy` | `rbac.applyWith` | Release Role |
 | --- | --- | --- |
@@ -271,7 +271,4 @@ The namespaces ClusterRole (`namespaces` get/create/patch) is still created only
 
 | Refused | Why |
 | --- | --- |
-| `config.applyWith` other than `helm` or `llmsvc` | unknown backend |
 | `rbac.applyWith` other than `helm`, `both` or `llmsvc` | unknown grant |
-| `config.applyWith: llmsvc` with `rbac.applyWith: helm` | swissd would write LLMServices it cannot |
-| `rbac.applyWith: llmsvc` with `config.applyWith: helm` | swissd would run helm without the deploy grant |

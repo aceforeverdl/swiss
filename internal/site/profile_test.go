@@ -249,3 +249,41 @@ func TestGPUProductAliases(t *testing.T) {
 		}
 	}
 }
+
+// applyWith is the backend a new install uses. Empty means helm. Anything else
+// is a typo in the document an operator edits from the web, so it is refused
+// when the profile is parsed.
+func TestApplyWithValidation(t *testing.T) {
+	const head = "name: prod\nmodel:\n  pathTemplate: /models/{{name}}\n"
+
+	p, err := Parse([]byte(head), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ApplyWith != "" {
+		t.Fatalf("omitted applyWith = %q, want empty (helm)", p.ApplyWith)
+	}
+
+	for _, raw := range []string{"applyWith: helm\n", "applyWith: \" helm \"\n"} {
+		p, err = Parse([]byte(head+raw), "test")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if p.ApplyWith != "helm" {
+			t.Fatalf("%q parsed to %q", raw, p.ApplyWith)
+		}
+	}
+	p, err = Parse([]byte(head+"applyWith: \" llmsvc \"\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p.ApplyWith != "llmsvc" {
+		t.Fatalf("applyWith = %q", p.ApplyWith)
+	}
+
+	for _, bad := range []string{"operator", "both", "LLM", "v2"} {
+		if _, err := Parse([]byte(head+"applyWith: "+bad+"\n"), "test"); err == nil {
+			t.Errorf("applyWith %q must be refused", bad)
+		}
+	}
+}

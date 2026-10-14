@@ -165,7 +165,7 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	access := s.llmsvcAccess(ctx)
-	applyWith := s.applyWith()
+	applyWith := s.applyWith(ctx)
 	newInstalls := backendHelm
 	if applyWith == backendLLMSVC && access.visible() {
 		newInstalls = backendLLMSVC
@@ -175,7 +175,7 @@ func (s *Server) handleCluster(w http.ResponseWriter, r *http.Request) {
 		info.Warnings = append(info.Warnings, "LLMService discovery failed: "+access.discErr.Error())
 	}
 	if applyWith == backendLLMSVC && !access.served {
-		msg := "server.applyWith is llmsvc but the LLMService CRD is not served; new installs use helm"
+		msg := "site profile applyWith is llmsvc but the LLMService CRD is not served; new installs use helm"
 		if access.discErr != nil {
 			msg += ": " + access.discErr.Error()
 		}

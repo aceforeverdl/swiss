@@ -98,11 +98,15 @@ func chooseBackend(served, hasService, hasConfigMap bool) (name string, cleanupP
 	return "", false
 }
 
-func (s *Server) applyWith() string {
-	if s.cfg.Server.ApplyWith == backendLLMSVC {
-		return backendLLMSVC
+// applyWith is the backend a new install uses, read from the site profile.
+// Empty and anything other than llmsvc are helm. An unreadable profile is
+// helm too: the cluster page already says the profile could not be read.
+func (s *Server) applyWith(ctx context.Context) string {
+	p, err := s.Profile(ctx)
+	if err != nil || p == nil || p.ApplyWith != backendLLMSVC {
+		return backendHelm
 	}
-	return backendHelm
+	return backendLLMSVC
 }
 
 func (s *Server) helmBackend() backend { return helmBackend{s} }
@@ -263,7 +267,7 @@ func (s *Server) backendForApply(ctx context.Context, p *plan.Plan, mode exec.Mo
 		return b, nil
 	}
 	if mode == exec.Install {
-		if s.applyWith() == backendLLMSVC && s.llmsvcAccess(ctx).visible() {
+		if s.applyWith(ctx) == backendLLMSVC && s.llmsvcAccess(ctx).visible() {
 			return s.llmBackend(), nil
 		}
 		return s.helmBackend(), nil

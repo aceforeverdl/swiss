@@ -151,7 +151,7 @@ func (b llmBackend) Archived(ctx context.Context, ns, release string, rev int) (
 }
 
 func (b llmBackend) Apply(ctx context.Context, p *plan.Plan, mode exec.Mode, o applyOpts) (applyResult, error) {
-	if err := b.requireCatalogV2(ctx, p); err != nil {
+	if err := b.requirePlanSchemaV2(p); err != nil {
 		return applyResult{}, err
 	}
 	if p.Chart.Path != "" {
@@ -363,23 +363,23 @@ func (b llmBackend) patchForce(ctx context.Context, ns, name string, generation 
 	return b.s.llms.Patch(ctx, ns, name, types.JSONPatchType, payload)
 }
 
-// requireCatalogV2 refuses the llmsvc backend unless the catalog repo this
-// plan belongs to is schema v2. Unset schemaVersion is v1. Helm is not checked.
-// The lookup is a read; a refusal returns before any namespace or object write.
-func (b llmBackend) requireCatalogV2(ctx context.Context, p *plan.Plan) error {
+// requirePlanSchemaV2 refuses the llmsvc backend unless the plan being written
+// records schema v2. Empty means v1: a plan composed from a v1 repo, and every
+// plan stored before v2. Rollback writes an already-composed plan, so the gate
+// is that plan's source.schema rather than whatever the site profile's catalog
+// says now -- the catalog may have been renamed, or its name pointed at a
+// different repo, since the plan was stored. Helm is not checked. A refusal
+// returns before any namespace or object write.
+func (b llmBackend) requirePlanSchemaV2(p *plan.Plan) error {
 	if p == nil {
 		return fail(http.StatusBadRequest, "nil plan")
 	}
-	repo, err := b.s.ReleaseCatalog(ctx, p.Source.CatalogName, p.Source.Catalog)
-	if err != nil {
-		return failErr(http.StatusBadRequest, err)
-	}
-	schema := strings.TrimSpace(repo.SchemaVersion)
+	schema := strings.TrimSpace(p.Source.Schema)
 	if schema == "" {
 		schema = catalog.SchemaV1
 	}
 	if schema != catalog.SchemaV2 {
-		return fail(http.StatusBadRequest, "LLMService backend requires catalog schema v2; catalog repo %s uses %s; use the helm backend or migrate the catalog to v2", repo.Name, schema)
+		return fail(http.StatusBadRequest, "LLMService backend requires catalog schema v2; this plan records schema %s; use the helm backend or migrate the catalog to v2", schema)
 	}
 	return nil
 }

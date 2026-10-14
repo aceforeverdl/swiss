@@ -63,15 +63,18 @@ func TestChartApplyWith(t *testing.T) {
 		t.Fatalf("both CRUD missing:\n%s", both)
 	}
 
-	only, err := helmTemplate(t, "config.allowDeploy=true", "config.applyWith=llmsvc", "rbac.applyWith=llmsvc")
+	only, err := helmTemplate(t, "config.allowDeploy=true", "rbac.applyWith=llmsvc")
 	if err != nil {
 		t.Fatal(only)
 	}
 	if strings.Contains(only, "leaderworkersets") || strings.Contains(only, "serviceaccounts") || strings.Contains(only, "poddisruptionbudgets") {
 		t.Fatal("llmsvc mode still grants deployRules")
 	}
-	if !strings.Contains(only, "applyWith: llmsvc") || !strings.Contains(only, `resources: ["llmservices"]`) || !strings.Contains(only, "controllerrevisions") {
-		t.Fatal("llmsvc mode missing its grant or server.applyWith")
+	if strings.Contains(only, "applyWith:") {
+		t.Fatal("the chart must not render applyWith; that is the site profile")
+	}
+	if !strings.Contains(only, `resources: ["llmservices"]`) || !strings.Contains(only, "controllerrevisions") {
+		t.Fatal("llmsvc mode missing its grant")
 	}
 	if !strings.Contains(only, `resources: ["namespaces"]`) || !strings.Contains(only, `resources: ["modelroutes"]`) {
 		t.Fatal("llmsvc mode missing namespaces or the read rules")
@@ -96,17 +99,21 @@ func TestChartApplyWith(t *testing.T) {
 		t.Fatal("cluster scope both should carry both grants on the ClusterRole")
 	}
 
-	for _, sets := range [][]string{
-		{"config.applyWith=llmsvc"},
-		{"config.applyWith=llmsvc", "rbac.applyWith=helm"},
-		{"rbac.applyWith=llmsvc"},
-		{"rbac.applyWith=llmsvc", "config.applyWith=helm"},
-		{"config.applyWith=operator"},
-		{"rbac.applyWith=operator"},
-	} {
-		out, err := helmTemplate(t, sets...)
-		if err == nil {
-			t.Fatalf("expected %v to fail:\n%s", sets, out)
-		}
+	// The grant and the backend are no longer paired. llmsvc without
+	// allowDeploy is the read view, and an unknown grant is still refused.
+	readLLM, err := helmTemplate(t, "rbac.applyWith=llmsvc")
+	if err != nil {
+		t.Fatal(readLLM)
+	}
+	if strings.Contains(readLLM, "leaderworkersets") || strings.Contains(readLLM, "applyWith:") {
+		t.Fatal("llmsvc without allowDeploy must stay a read grant and must not render applyWith")
+	}
+	if !strings.Contains(readLLM, `resources: ["llmservices"]`) || !strings.Contains(readLLM, `verbs: ["get","list","watch"]`) {
+		t.Fatalf("llmsvc read view missing:\n%s", readLLM)
+	}
+
+	out, err := helmTemplate(t, "rbac.applyWith=operator")
+	if err == nil {
+		t.Fatalf("expected rbac.applyWith=operator to fail:\n%s", out)
 	}
 }

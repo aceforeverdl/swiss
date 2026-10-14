@@ -72,17 +72,6 @@ config:
   # are yours to wire.
   allowDeploy: false
 
-  # Backend a new install uses, rendered as server.applyWith.
-  #
-  #   helm    (default) swissd runs helmfile, as today. Left out of the rendered
-  #           swiss.yaml: helm is already swissd's default, so a chart that does
-  #           not change this stays byte-for-byte the previous ConfigMap.
-  #   llmsvc  swissd creates an LLMService and the operator runs helm. Needs the
-  #           CRD, and rbac.applyWith of both or llmsvc. The chart refuses the
-  #           other pairing either way: llmsvc here with a helm-only grant, or
-  #           helm here with the llmsvc-only grant.
-  applyWith: helm
-
   # Drafts, plans and the audit log. Never the source of truth for what is
   # deployed -- every applied plan is also written beside its release.
   database: /data/swiss.db
@@ -189,7 +178,8 @@ rbac:
   #           CRUD, controllerrevisions get/list, the namespaces ClusterRole,
   #           and the read grants (secrets/configmaps/pods get/list, plus the
   #           modelroute/scaler/slo reads). Without allowDeploy: the same read
-  #           views as both. Requires config.applyWith llmsvc.
+  #           views as both. The backend a new install uses is applyWith on
+  #           the site profile, not this grant.
   applyWith: helm
 
   # Namespaces holding model releases. Used when scope is namespaced.

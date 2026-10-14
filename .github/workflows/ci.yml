@@ -60,7 +60,7 @@ jobs:
           lint
           lint $deploy
           lint $deploy --set rbac.applyWith=both
-          lint $deploy --set rbac.applyWith=llmsvc --set config.applyWith=llmsvc
+          lint $deploy --set rbac.applyWith=llmsvc
           lint --set rbac.scope=cluster $deploy --set rbac.applyWith=both
 
   gate:
