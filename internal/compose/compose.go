@@ -173,11 +173,6 @@ func catalogLayer(r catalog.Resolved) (values.Tree, error) {
 		if err := values.Set(out, "image.tag", v.Image.Tag); err != nil {
 			return nil, err
 		}
-		if v.Image.Digest != "" {
-			if err := values.Set(out, "image.digest", v.Image.Digest); err != nil {
-				return nil, err
-			}
-		}
 	}
 	return out, nil
 }

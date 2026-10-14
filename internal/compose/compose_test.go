@@ -97,6 +97,19 @@ func TestNoMirrorLeavesTheCatalogImageAlone(t *testing.T) {
 	}
 }
 
+// The charts' schema allows only repository and tag under image.
+func TestComposeDoesNotProjectTheImageDigest(t *testing.T) {
+	in := testInput()
+	in.Resolved.Variant.Image.Digest = "sha256:d6e7288627be8b02be88e4bba38e73f6d50e2826869f753c13a4c4385ab3eda9"
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, ok := values.Get(p.Values(), "image.digest"); ok {
+		t.Errorf("image.digest = %#v, want it absent", got)
+	}
+}
+
 // The mirror is an override like any other: visible in the plan as the site
 // shadowing the catalog, rather than the catalog's value never being there.
 func TestMirrorShadowsTheCatalogRepository(t *testing.T) {

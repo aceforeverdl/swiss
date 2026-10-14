@@ -38,7 +38,7 @@ about precedence.
 | layer | owns |
 | --- | --- |
 | chart defaults | everything not claimed below |
-| **catalog variant** | model identity and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image` |
+| **catalog variant** | model identity and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image.repository`, `image.tag` (a variant's `image.digest` stays out: the charts' schema rejects it) |
 | **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template, the default scheduler and priority class |
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
