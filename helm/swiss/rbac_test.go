@@ -6,6 +6,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"gopkg.in/yaml.v3"
 )
 
 func chartDir(t *testing.T) string {
@@ -19,7 +21,12 @@ func chartDir(t *testing.T) string {
 
 func helmTemplate(t *testing.T, sets ...string) (string, error) {
 	t.Helper()
-	args := []string{"template", "swiss", chartDir(t), "--set", "rbac.namespaces={models}"}
+	return helmTemplateIn(t, "default", append([]string{"rbac.namespaces={models}"}, sets...)...)
+}
+
+func helmTemplateIn(t *testing.T, namespace string, sets ...string) (string, error) {
+	t.Helper()
+	args := []string{"template", "swiss", chartDir(t), "--namespace", namespace}
 	for _, s := range sets {
 		args = append(args, "--set", s)
 	}
@@ -28,92 +35,103 @@ func helmTemplate(t *testing.T, sets ...string) (string, error) {
 	return string(out), err
 }
 
-func TestChartApplyWith(t *testing.T) {
+// The grant does not depend on how a release is installed: the method is picked
+// per install, so every release Role carries both the helm rules and LLMService.
+func TestChartGrantsLLMService(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm not on PATH")
 	}
+	crud := `verbs: ["get","list","watch","create","update","patch","delete"]`
 
-	def, err := helmTemplate(t)
-	if err != nil {
-		t.Fatal(def)
-	}
-	if strings.Contains(def, "llmservices") || strings.Contains(def, "applyWith:") || strings.Contains(def, "controllerrevisions") {
-		t.Fatalf("default render gained llmsvc output:\n%s", def)
-	}
-
-	helmDeploy, err := helmTemplate(t, "config.allowDeploy=true", "rbac.applyWith=helm")
-	if err != nil {
-		t.Fatal(helmDeploy)
-	}
-	if strings.Contains(helmDeploy, "llmservices") || strings.Contains(helmDeploy, "controllerrevisions") {
-		t.Fatal("rbac.applyWith helm added LLMService rules")
-	}
-	if !strings.Contains(helmDeploy, "leaderworkersets") {
-		t.Fatal("allowDeploy helm lost deployRules")
-	}
-
-	both, err := helmTemplate(t, "config.allowDeploy=true", "rbac.applyWith=both")
-	if err != nil {
-		t.Fatal(both)
-	}
-	if !strings.Contains(both, "leaderworkersets") || !strings.Contains(both, `resources: ["llmservices"]`) {
-		t.Fatal("both should keep deployRules and add llmservices")
-	}
-	if !strings.Contains(both, `verbs: ["get","list","watch","create","update","patch","delete"]`) || !strings.Contains(both, "controllerrevisions") {
-		t.Fatalf("both CRUD missing:\n%s", both)
-	}
-
-	only, err := helmTemplate(t, "config.allowDeploy=true", "rbac.applyWith=llmsvc")
-	if err != nil {
-		t.Fatal(only)
-	}
-	if strings.Contains(only, "leaderworkersets") || strings.Contains(only, "serviceaccounts") || strings.Contains(only, "poddisruptionbudgets") {
-		t.Fatal("llmsvc mode still grants deployRules")
-	}
-	if strings.Contains(only, "applyWith:") {
-		t.Fatal("the chart must not render applyWith; that is the site profile")
-	}
-	if !strings.Contains(only, `resources: ["llmservices"]`) || !strings.Contains(only, "controllerrevisions") {
-		t.Fatal("llmsvc mode missing its grant")
-	}
-	if !strings.Contains(only, `resources: ["namespaces"]`) || !strings.Contains(only, `resources: ["modelroutes"]`) {
-		t.Fatal("llmsvc mode missing namespaces or the read rules")
-	}
-
-	read, err := helmTemplate(t, "rbac.applyWith=both")
+	read, err := helmTemplate(t, "config.allowDeploy=false")
 	if err != nil {
 		t.Fatal(read)
 	}
-	if strings.Contains(read, "leaderworkersets") || strings.Contains(read, `verbs: ["get","list","watch","create","update","patch","delete"]`) {
-		t.Fatal("without allowDeploy, both must stay read-only")
+	if strings.Contains(read, "leaderworkersets") || strings.Contains(read, crud) {
+		t.Fatal("without allowDeploy the release Role must stay read-only")
 	}
 	if !strings.Contains(read, `resources: ["llmservices"]`) || !strings.Contains(read, `verbs: ["get","list","watch"]`) || !strings.Contains(read, "controllerrevisions") {
-		t.Fatalf("read view missing:\n%s", read)
+		t.Fatalf("read view missing llmservices:\n%s", read)
+	}
+	if !strings.Contains(read, `resources: ["modelroutes"]`) {
+		t.Fatal("read view lost the object read rules")
 	}
 
-	cluster, err := helmTemplate(t, "rbac.scope=cluster", "config.allowDeploy=true", "rbac.applyWith=both")
+	// Deploy is the chart's default.
+	deploy, err := helmTemplate(t)
+	if err != nil {
+		t.Fatal(deploy)
+	}
+	if !strings.Contains(deploy, "leaderworkersets") || !strings.Contains(deploy, "disaggregatedsets") {
+		t.Fatal("allowDeploy lost deployRules")
+	}
+	if !strings.Contains(deploy, `resources: ["llmservices"]`) || !strings.Contains(deploy, crud) || !strings.Contains(deploy, "controllerrevisions") {
+		t.Fatalf("allowDeploy missing llmservices CRUD:\n%s", deploy)
+	}
+	if !strings.Contains(deploy, `resources: ["namespaces"]`) {
+		t.Fatal("allowDeploy missing the namespaces ClusterRole")
+	}
+	if strings.Contains(deploy, "applyWith:") {
+		t.Fatal("the chart must not render applyWith; that is the site profile")
+	}
+
+	cluster, err := helmTemplate(t, "rbac.scope=cluster")
 	if err != nil {
 		t.Fatal(cluster)
 	}
 	if !strings.Contains(cluster, "kind: ClusterRole") || !strings.Contains(cluster, "llmservices") || !strings.Contains(cluster, "leaderworkersets") {
-		t.Fatal("cluster scope both should carry both grants on the ClusterRole")
+		t.Fatal("cluster scope should carry both grants on the ClusterRole")
 	}
+}
 
-	// The grant and the backend are no longer paired. llmsvc without
-	// allowDeploy is the read view, and an unknown grant is still refused.
-	readLLM, err := helmTemplate(t, "rbac.applyWith=llmsvc")
-	if err != nil {
-		t.Fatal(readLLM)
+// Two installs under one release name, each in its own namespace and managing
+// only that namespace, must not render an object the other also owns.
+func TestChartInstallsSideBySide(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not on PATH")
 	}
-	if strings.Contains(readLLM, "leaderworkersets") || strings.Contains(readLLM, "applyWith:") {
-		t.Fatal("llmsvc without allowDeploy must stay a read grant and must not render applyWith")
+	owned := map[string]string{}
+	for _, ns := range []string{"team-a", "team-b"} {
+		out, err := helmTemplateIn(t, ns, "rbac.namespaces={"+ns+"}")
+		if err != nil {
+			t.Fatal(out)
+		}
+		for _, id := range objectIDs(t, out, ns) {
+			if other, ok := owned[id]; ok {
+				t.Errorf("%s is rendered by both the %s and the %s install", id, other, ns)
+			}
+			owned[id] = ns
+		}
 	}
-	if !strings.Contains(readLLM, `resources: ["llmservices"]`) || !strings.Contains(readLLM, `verbs: ["get","list","watch"]`) {
-		t.Fatalf("llmsvc read view missing:\n%s", readLLM)
-	}
+}
 
-	out, err := helmTemplate(t, "rbac.applyWith=operator")
-	if err == nil {
-		t.Fatalf("expected rbac.applyWith=operator to fail:\n%s", out)
+// objectIDs is kind/namespace/name per rendered object; cluster-scoped kinds
+// have no namespace, and a namespaced one without its own is the release's.
+func objectIDs(t *testing.T, rendered, releaseNS string) []string {
+	t.Helper()
+	var ids []string
+	for _, doc := range strings.Split(rendered, "\n---") {
+		var obj struct {
+			Kind     string `yaml:"kind"`
+			Metadata struct {
+				Name      string `yaml:"name"`
+				Namespace string `yaml:"namespace"`
+			} `yaml:"metadata"`
+		}
+		if err := yaml.Unmarshal([]byte(doc), &obj); err != nil {
+			t.Fatal(err)
+		}
+		if obj.Kind == "" {
+			continue
+		}
+		ns := obj.Metadata.Namespace
+		switch {
+		case strings.HasPrefix(obj.Kind, "Cluster"):
+			ns = ""
+		case ns == "":
+			ns = releaseNS
+		}
+		ids = append(ids, obj.Kind+"/"+ns+"/"+obj.Metadata.Name)
 	}
+	return ids
 }

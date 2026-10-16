@@ -116,6 +116,9 @@ passes them on.
 - apiGroups: ["leaderworkerset.x-k8s.io"]
   resources: ["leaderworkersets"]
   verbs: {{ $all | toJson }}
+- apiGroups: ["disaggregatedset.x-k8s.io"]
+  resources: ["disaggregatedsets"]
+  verbs: {{ $all | toJson }}
 - apiGroups: ["autoscaling.4pd.io", "autoscaling.modelsphere.dev"]
   resources: ["llmscalers"]
   verbs: {{ $all | toJson }}
@@ -128,7 +131,8 @@ passes them on.
 {{- end -}}
 
 {{/*
-LLMService access for rbac.applyWith other than helm. With allowDeploy the
+LLMService access, granted whichever install method a release uses: the method
+is picked per install, so the grant cannot depend on it. With allowDeploy the
 release Role can write llmservices; without it, get/list/watch is enough for
 the deployments page. controllerrevisions are always read-only: they hold
 archived specs.
@@ -144,12 +148,4 @@ archived specs.
 - apiGroups: ["apps"]
   resources: ["controllerrevisions"]
   verbs: {{ list "get" "list" | toJson }}
-{{- end -}}
-
-{{/* rbac.applyWith is the install-time grant. The backend is applyWith on the site profile. */}}
-{{- define "swiss.validateApplyWith" -}}
-{{- $rbacApply := .Values.rbac.applyWith | default "helm" -}}
-{{- if not (or (eq $rbacApply "helm") (eq $rbacApply "both") (eq $rbacApply "llmsvc")) -}}
-{{- fail (printf "rbac.applyWith %q must be helm, both or llmsvc" $rbacApply) -}}
-{{- end -}}
 {{- end -}}
