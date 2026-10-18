@@ -313,21 +313,6 @@ paths:
                   yaml: { type: string, description: "The stored document, comments included." }
                   profile: { $ref: "#/components/schemas/SiteProfile" }
                   cluster: { type: string, description: "The profile's name." }
-                  defaults:
-                    type: object
-                    description: |
-                      The profile's `defaults` resolved: `features` carries every key of
-                      `profile.defaults.features` with unset as true, which a variant's own
-                      flag overrides. Routing is `profile.route.enabled`, not here. Absent
-                      when the profile does not parse.
-                    properties:
-                      features:
-                        type: object
-                        properties:
-                          cart: { type: boolean }
-                          serviceMonitor: { type: boolean }
-                          sloRequirement: { type: boolean }
-                          scaler: { type: boolean }
                   error: { type: string, description: "Why the document does not parse." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { $ref: "#/components/responses/BadGateway" }

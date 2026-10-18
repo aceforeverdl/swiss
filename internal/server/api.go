@@ -377,9 +377,6 @@ func (s *Server) handleProfile(w http.ResponseWriter, r *http.Request) {
 	if p, err := s.Profile(ctx); err == nil {
 		out["profile"] = p
 		out["cluster"] = p.Name
-		// The profile's defaults resolved, so a deploy form starts where compose
-		// would rather than keeping its own copy of "unset is on".
-		out["defaults"] = map[string]any{"features": p.Defaults.Features.Resolve()}
 	} else {
 		out["error"] = err.Error()
 	}
