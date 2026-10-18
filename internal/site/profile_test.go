@@ -1,6 +1,9 @@
 package site
 
-import "testing"
+import (
+	"maps"
+	"testing"
+)
 
 func profile() Profile {
 	return Profile{
@@ -285,5 +288,19 @@ func TestApplyWithValidation(t *testing.T) {
 		if _, err := Parse([]byte(head+"applyWith: "+bad+"\n"), "test"); err == nil {
 			t.Errorf("applyWith %q must be refused", bad)
 		}
+	}
+}
+
+func TestFeatureDefaultsUnsetIsOn(t *testing.T) {
+	p, err := Parse([]byte(DefaultYAML("x")+"\ndefaults:\n  features:\n    scaler: false\n"), "test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]bool{"cart": true, "serviceMonitor": true, "sloRequirement": true, "scaler": false}
+	if got := p.Defaults.Features.Resolve(); !maps.Equal(got, want) {
+		t.Errorf("Resolve() = %v, want %v", got, want)
+	}
+	if p.Route.Enabled {
+		t.Error("the default profile routes nothing until a deploy asks")
 	}
 }

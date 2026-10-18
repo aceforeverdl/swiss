@@ -31,17 +31,19 @@ helm repo (`https://modelsphere.github.io/helm-charts` by default).
 
 ## Layers
 
-Composition is four inputs with disjoint key sets and strict precedence. If two
-layers could set one key, every question about this system becomes a question
-about precedence.
+Composition is a few inputs with key sets and strict precedence. Later layer overrides.
+
 
 | layer | owns |
 | --- | --- |
-| chart defaults | everything not claimed below |
-| **catalog variant** | model identity and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image.repository`, `image.tag` (a variant's `image.digest` stays out: the charts' schema rejects it) |
+| helm chart defaults | things defaults in sglang/vllm chart values.yaml |
+| **site defaults** (`defaults`) | the site's preferences, config it in `defaults.features` in the profile, the `cart`, `serviceMonitor`, `sloRequirement` and `scaler` `enabled` flags, unset on |
+| **catalog variant** | model deployment recipes define in [model-catalog](https://github.com/modelsphere/model-catalog) and how it parallelizes: `model.*`, `extraArgs`, `lws.*`, `env`, `image.repository` |
 | **site profile** | what makes it work here: the registry mirror, cache paths, route ConfigMaps, namespace, the `model.localPath` template, the default scheduler and priority class |
+| **derived** | swiss's rules, above the variant: a section the form filled in is switched on, `cache.maxSlotsPerNode` |
 | **user form** | how much, where, how routed: `serviceId`, `replicaCount`, `scaler.*`, `modelRoute.*`, scheduling |
 | **plan editor** | the escape hatch, applied last — any key, exempt from ownership, labelled `edit` |
+
 
 ## The pipeline
 

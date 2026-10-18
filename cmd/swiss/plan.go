@@ -230,7 +230,7 @@ func printExplain(p *plan.Plan) {
 	fmt.Printf("chart %s-%s   engine %s   profile %s\n%s\n\n", p.Chart.Name, p.Chart.Version, p.Engine, p.Profile, p.Hash)
 
 	byLayer := p.ByLayer()
-	for _, layer := range []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit} {
+	for _, layer := range plan.Layers {
 		paths := byLayer[layer]
 		if len(paths) == 0 {
 			continue

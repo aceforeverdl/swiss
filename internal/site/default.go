@@ -81,7 +81,22 @@ scaler:
   # sloTokenSecret: llm-scaler/slo-api
   # sloTokenKey: token
 
+# The site's preferences, beneath the catalog: a variant that sets one of these
+# overrides it, and a deploy can still choose either way. Every other section
+# here is a fact about this cluster and wins over the variant.
+# defaults:
+#   # What a deploy starts each feature at; unset is on. Routing is not here:
+#   # it is route.enabled, which no variant can override.
+#   features:
+#     cart: true
+#     serviceMonitor: true
+#     sloRequirement: true
+#     scaler: true
+
 route:
+  # Whether a deploy publishes a route on openresty unless it says otherwise.
+  # A site fact, so a catalog variant cannot turn it on; unset is off.
+  enabled: false
   # Where callers reach openresty from outside, e.g. https://llm.example.com.
   # Display only: every check swissd makes still goes to the in-cluster
   # service, so this can be absent without breaking anything but the link.

@@ -243,7 +243,7 @@ func (p *Plan) YAML() ([]byte, error) {
 }
 
 // Layers are the values documents a release is applied through, in merge order.
-var Layers = []string{values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit}
+var Layers = []string{values.LayerDefaults, values.LayerCatalog, values.LayerSite, values.LayerDerived, values.LayerForm, values.LayerEdit}
 
 // LayerValues splits the composed values by the layer that set each path, so a
 // release is applied through one document per layer rather than one merged file.

@@ -313,6 +313,21 @@ paths:
                   yaml: { type: string, description: "The stored document, comments included." }
                   profile: { $ref: "#/components/schemas/SiteProfile" }
                   cluster: { type: string, description: "The profile's name." }
+                  defaults:
+                    type: object
+                    description: |
+                      The profile's `defaults` resolved: `features` carries every key of
+                      `profile.defaults.features` with unset as true, which a variant's own
+                      flag overrides. Routing is `profile.route.enabled`, not here. Absent
+                      when the profile does not parse.
+                    properties:
+                      features:
+                        type: object
+                        properties:
+                          cart: { type: boolean }
+                          serviceMonitor: { type: boolean }
+                          sloRequirement: { type: boolean }
+                          scaler: { type: boolean }
                   error: { type: string, description: "Why the document does not parse." }
         "401": { $ref: "#/components/responses/Unauthorized" }
         "502": { $ref: "#/components/responses/BadGateway" }
@@ -1351,9 +1366,22 @@ components:
             sloTokenSecret: { type: string }
             sloTokenKey: { type: string }
             serverHeaders: { type: object, additionalProperties: { type: string } }
+        defaults:
+          type: object
+          description: The site's preferences, composed beneath the catalog as the `defaults` layer, so a variant overrides them. Every other section is a site fact, composed above the catalog.
+          properties:
+            features:
+              type: object
+              description: What a deploy starts each feature at. Unset is on. Routing is `route.enabled`, a site fact.
+              properties:
+                cart: { type: boolean }
+                serviceMonitor: { type: boolean }
+                sloRequirement: { type: boolean }
+                scaler: { type: boolean }
         route:
           type: object
           properties:
+            enabled: { type: boolean, description: "`modelRoute.enabled` for every deploy, in the `site` layer above the catalog, so a variant cannot turn it on; a deploy still can. Unset is off." }
             nginxConfigMap: { type: string }
             nginxService: { type: string }
             nginxSelector: { type: string }
@@ -1572,8 +1600,9 @@ components:
         profile: { type: string }
         layers:
           type: object
-          description: "One values document per layer, applied in order: `catalog`, `site`, `derived`, `form`, `edit`."
+          description: "One values document per layer, applied in order: `defaults`, `catalog`, `site`, `derived`, `form`, `edit`."
           properties:
+            defaults: { type: object }
             catalog: { type: object }
             site: { type: object }
             derived: { type: object }

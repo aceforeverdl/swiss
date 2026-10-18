@@ -70,6 +70,11 @@ type Profile struct {
 	Route    Route      `yaml:"route,omitempty" json:"route"`
 	Nodes    Nodes      `yaml:"nodes,omitempty" json:"nodes"`
 
+	// Defaults are the site's preferences, composed beneath the catalog so a
+	// variant overrides them. Every other section is a fact about this cluster
+	// and composes above the catalog.
+	Defaults Defaults `yaml:"defaults,omitempty" json:"defaults"`
+
 	// Sites are the other clusters' swissd instances, for the nav switcher.
 	//
 	// In the profile rather than swissd's config because it is a fact about the
@@ -137,6 +142,31 @@ type Scaler struct {
 	ServerHeaders  map[string]string `yaml:"serverHeaders,omitempty" json:"serverHeaders,omitempty"`
 }
 
+type Defaults struct {
+	Features FeatureDefaults `yaml:"features,omitempty" json:"features"`
+}
+
+// FeatureDefaults are per-site <section>.enabled defaults. Unset is on.
+// modelRoute is not one: it is route.enabled, a site fact the variant cannot
+// override.
+type FeatureDefaults struct {
+	Cart           *bool `yaml:"cart,omitempty" json:"cart,omitempty"`
+	ServiceMonitor *bool `yaml:"serviceMonitor,omitempty" json:"serviceMonitor,omitempty"`
+	SLORequirement *bool `yaml:"sloRequirement,omitempty" json:"sloRequirement,omitempty"`
+	Scaler         *bool `yaml:"scaler,omitempty" json:"scaler,omitempty"`
+}
+
+// Resolve gives each feature's default by chart section.
+func (f FeatureDefaults) Resolve() map[string]bool {
+	on := func(b *bool) bool { return b == nil || *b }
+	return map[string]bool{
+		"cart":           on(f.Cart),
+		"serviceMonitor": on(f.ServiceMonitor),
+		"sloRequirement": on(f.SLORequirement),
+		"scaler":         on(f.Scaler),
+	}
+}
+
 // DefaultSLOAddress is the in-cluster SLO API when the profile names none.
 const DefaultSLOAddress = "http://slo-api.llm-scaler.svc:80"
 
@@ -165,6 +195,10 @@ func (sc Scaler) SLOTokenKeyName() string {
 }
 
 type Route struct {
+	// Enabled is modelRoute.enabled for every deploy here, above the catalog
+	// so no variant can publish a route on its own. A deploy can still turn
+	// routing on or off. Unset is off.
+	Enabled bool `yaml:"enabled,omitempty" json:"enabled,omitempty"`
 	// NginxConfigMap is the shared openresty ConfigMap ("ns/name") every model
 	// on one entrypoint writes a key into. The route-collision preflight is
 	// scoped to this value.

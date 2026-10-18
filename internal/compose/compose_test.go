@@ -339,8 +339,8 @@ func TestEnabledCacheStillDerivesSlots(t *testing.T) {
 	}
 }
 
-// Every feature's flag is written down. cart is the one that is on by default;
-// the rest stay off until a deploy asks.
+// Every feature's flag is written down. A site that says nothing gets all of
+// them on but routing, which route.enabled leaves off.
 func TestFeatureDefaultsAreExplicit(t *testing.T) {
 	p, err := Compose(testInput())
 	if err != nil {
@@ -349,9 +349,9 @@ func TestFeatureDefaultsAreExplicit(t *testing.T) {
 	for feature, want := range map[string]bool{
 		"cart":           true,
 		"modelRoute":     false,
-		"sloRequirement": false,
-		"scaler":         false,
-		"serviceMonitor": false,
+		"sloRequirement": true,
+		"scaler":         true,
+		"serviceMonitor": true,
 	} {
 		v, ok := values.Get(p.Values(), feature+".enabled")
 		if !ok {
@@ -361,6 +361,83 @@ func TestFeatureDefaultsAreExplicit(t *testing.T) {
 		if v != want {
 			t.Errorf("%s.enabled = %v, want %v", feature, v, want)
 		}
+	}
+}
+
+// The site profile's defaults.features land in the defaults layer, beneath the
+// variant.
+func TestSiteFeatureDefaults(t *testing.T) {
+	in := testInput()
+	off := false
+	in.Profile.Defaults.Features = site.FeatureDefaults{Scaler: &off, ServiceMonitor: &off}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for feature, want := range map[string]bool{"scaler": false, "serviceMonitor": false, "cart": true, "sloRequirement": true} {
+		if v, _ := values.Get(p.Values(), feature+".enabled"); v != want {
+			t.Errorf("%s.enabled = %v, want %v", feature, v, want)
+		}
+		if got := p.LayerOf(feature + ".enabled"); got != values.LayerDefaults {
+			t.Errorf("%s.enabled from %q, want %q", feature, got, values.LayerDefaults)
+		}
+	}
+}
+
+// A variant's own flag stands over the site's default, and the form can still
+// turn it off. modelRoute is a site fact the variant cannot turn on.
+func TestVariantFeatureDefaultsStand(t *testing.T) {
+	in := testInput()
+	off := false
+	in.Profile.Defaults.Features = site.FeatureDefaults{Scaler: &off}
+	in.Resolved.Variant.Values["scaler"] = map[string]any{"enabled": true}
+	in.Resolved.Variant.Values["serviceMonitor"] = map[string]any{"enabled": true}
+	in.Resolved.Variant.Values["cart"] = map[string]any{"enabled": false}
+	in.Resolved.Variant.Values["modelRoute"] = map[string]any{"enabled": true}
+	in.Overrides = values.Tree{"serviceMonitor": map[string]any{"enabled": false}}
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for feature, want := range map[string]struct {
+		on    bool
+		layer string
+	}{
+		"scaler":         {true, values.LayerCatalog},
+		"cart":           {false, values.LayerCatalog},
+		"serviceMonitor": {false, values.LayerForm},
+		"sloRequirement": {true, values.LayerDefaults},
+		"modelRoute":     {false, values.LayerSite},
+	} {
+		if v, _ := values.Get(p.Values(), feature+".enabled"); v != want.on {
+			t.Errorf("%s.enabled = %v, want %v", feature, v, want.on)
+		}
+		if got := p.LayerOf(feature + ".enabled"); got != want.layer {
+			t.Errorf("%s.enabled from %q, want %q", feature, got, want.layer)
+		}
+	}
+}
+
+// route.enabled is the site's routing default, and the form still decides.
+func TestSiteRouteEnabled(t *testing.T) {
+	in := testInput()
+	in.Profile.Route.Enabled = true
+	p, err := Compose(in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values(), "modelRoute.enabled"); v != true {
+		t.Errorf("modelRoute.enabled = %v, want true", v)
+	}
+	if got := p.LayerOf("modelRoute.enabled"); got != values.LayerSite {
+		t.Errorf("modelRoute.enabled from %q, want %q", got, values.LayerSite)
+	}
+	in.Overrides = values.Tree{"modelRoute": map[string]any{"enabled": false}}
+	if p, err = Compose(in); err != nil {
+		t.Fatal(err)
+	}
+	if v, _ := values.Get(p.Values(), "modelRoute.enabled"); v != false {
+		t.Errorf("the form's off did not take: %v", v)
 	}
 }
 
@@ -381,6 +458,8 @@ func TestPlanWritesNoMetricsMock(t *testing.T) {
 // on. Neither leans on a chart default.
 func TestTouchingASectionEnablesIt(t *testing.T) {
 	in := testInput()
+	off := false
+	in.Profile.Defaults.Features = site.FeatureDefaults{Scaler: &off, SLORequirement: &off}
 	in.Overrides = values.Tree{
 		"scaler":     map[string]any{"maxReplicas": 8},
 		"modelRoute": map[string]any{"nginx": map[string]any{"route": "glm-5"}},
@@ -395,7 +474,7 @@ func TestTouchingASectionEnablesIt(t *testing.T) {
 		}
 	}
 	if v, _ := values.Get(p.Values(), "sloRequirement.enabled"); v != false {
-		t.Errorf("an untouched feature stays off: %v", v)
+		t.Errorf("an untouched feature keeps the site's default: %v", v)
 	}
 }
 
@@ -434,7 +513,7 @@ func TestLayerValuesSplitByProvenance(t *testing.T) {
 		t.Errorf("the site document must carry the mirror, got %#v", got)
 	}
 	files := p.ValuesFiles()
-	if len(files) < 2 || files[0] != "catalog.yaml" {
+	if len(files) < 3 || files[0] != "defaults.yaml" || files[1] != "catalog.yaml" {
 		t.Fatalf("values files must be in merge order: %v", files)
 	}
 }

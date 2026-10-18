@@ -73,6 +73,10 @@ func Compose(in Input) (*plan.Plan, error) {
 		}
 	}
 
+	defaultsVals, err := defaultsLayer(in.Profile)
+	if err != nil {
+		return nil, fmt.Errorf("defaults layer: %w", err)
+	}
 	catalogVals, err := catalogLayer(in.Resolved)
 	if err != nil {
 		return nil, fmt.Errorf("catalog layer: %w", err)
@@ -96,11 +100,12 @@ func Compose(in Input) (*plan.Plan, error) {
 	// nothing needs a separate record of which one won.
 	layers := map[string]values.Tree{}
 	for name, tree := range map[string]values.Tree{
-		values.LayerCatalog: catalogVals,
-		values.LayerSite:    siteVals,
-		values.LayerDerived: derivedVals,
-		values.LayerForm:    in.Overrides,
-		values.LayerEdit:    in.Edits,
+		values.LayerDefaults: defaultsVals,
+		values.LayerCatalog:  catalogVals,
+		values.LayerSite:     siteVals,
+		values.LayerDerived:  derivedVals,
+		values.LayerForm:     in.Overrides,
+		values.LayerEdit:     in.Edits,
 	} {
 		if len(tree) > 0 {
 			layers[name] = tree
@@ -141,6 +146,18 @@ func Compose(in Input) (*plan.Plan, error) {
 		p.Helmfile = doc
 	}
 	return p, nil
+}
+
+// defaultsLayer renders the profile's defaults: what a deploy gets when the
+// variant and the form leave a key alone.
+func defaultsLayer(p site.Profile) (values.Tree, error) {
+	out := values.Tree{}
+	for feature, on := range p.Defaults.Features.Resolve() {
+		if err := values.Set(out, feature+".enabled", on); err != nil {
+			return nil, err
+		}
+	}
+	return out, nil
 }
 
 // catalogLayer renders the entry and variant into chart values.
@@ -212,6 +229,9 @@ func siteLayer(p site.Profile, v catalog.Variant) (values.Tree, error) {
 			return nil, err
 		}
 	}
+	if err := values.Set(out, "modelRoute.enabled", p.Route.Enabled); err != nil {
+		return nil, err
+	}
 	for path, val := range map[string]string{
 		"modelRoute.nginx.outputConfigMap":   p.Route.NginxConfigMap,
 		"modelRoute.nginx.service":           p.Route.NginxService,
@@ -265,30 +285,18 @@ func applyDefaults(site, derived, base values.Tree, in Input) error {
 		}
 	}
 
-	// Every feature's enabled flag is written down, never left to the chart:
-	// scaler, sloRequirement, cart and serviceMonitor all default to ENABLED in
-	// charts/sglang, so a deploy that mentions none of them silently gets all
-	// four -- and that set is a chart default, free to change under a release
-	// that never asked for any of it.
-	//
-	// A section the form touched is one the deploy wants: it is switched on
-	// explicitly unless the form said otherwise, which is how filling in scaling
-	// numbers turns the scaler on and naming a route turns routing on.
-	for feature, onByDefault := range map[string]bool{
-		"cart":           true,
-		"modelRoute":     false,
-		"sloRequirement": false,
-		"scaler":         false,
-		"serviceMonitor": false,
-	} {
+	// dont trust chart default values, we control those feature explicitly
+	// - modelroute: the site layer's route.enabled, above the variant, off unless set
+	// - cart, servicemonitor, scaler, slorequirement: the site's defaults layer, beneath the variant
+	// - a section the form touched is one the deploy wants: on, unless the form said otherwise
+	for _, feature := range []string{"cart", "modelRoute", "sloRequirement", "scaler", "serviceMonitor"} {
 		if _, set := values.Get(in.Overrides, feature+".enabled"); set {
 			continue // the form is explicit; its merge lands after this
 		}
-		want := onByDefault
-		if touched(in.Overrides, feature) {
-			want = true
+		if !touched(in.Overrides, feature) {
+			continue // the defaults or site layer has it
 		}
-		if err := values.Set(derived, feature+".enabled", want); err != nil {
+		if err := values.Set(derived, feature+".enabled", true); err != nil {
 			return err
 		}
 	}

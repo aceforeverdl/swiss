@@ -57,7 +57,7 @@ func TestRoundTripKeepsThePlanHash(t *testing.T) {
 	if u.GetNamespace() != "models" || u.GetName() != "qwen" {
 		t.Fatalf("meta %s/%s", u.GetNamespace(), u.GetName())
 	}
-	if got := layerNames(t, u); !reflect.DeepEqual(got, []string{"catalog", "site", "derived", "form", "edit"}) {
+	if got := layerNames(t, u); !reflect.DeepEqual(got, []string{"defaults", "catalog", "site", "derived", "form", "edit"}) {
 		t.Fatalf("layers %v", got)
 	}
 	back, err := ToPlan(u)
