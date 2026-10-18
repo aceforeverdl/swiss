@@ -56,7 +56,7 @@ jobs:
           image="ghcr.io/$owner/swissd"
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             version=${GITHUB_REF#refs/tags/}
-            if [ "$version" != "$app" ]; then
+            if [ "${version%%-*}" != "$app" ]; then
               echo "tag $version, but helm/swiss/Chart.yaml appVersion is $app" >&2
               exit 1
             fi
