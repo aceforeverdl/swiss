@@ -77,6 +77,12 @@ jobs:
             echo "::notice::DOCKERHUB_USERNAME/DOCKERHUB_TOKEN not set; $HUB_IMAGE not pushed, GHCR only"
           fi
 
+      - name: ensure source version match tag
+        env:
+          VERSION: ${{ steps.v.outputs.version }}
+        run: |
+          ./hack/bump.sh "$VERSION"
+
       - name: Set up Buildx
         uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
 
